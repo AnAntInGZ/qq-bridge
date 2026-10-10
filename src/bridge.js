@@ -11007,15 +11007,12 @@ async function main() {
   });
   bot.on('error', (error) => log('SnowLuma 错误:', error));
 
-  // SnowLuma 尚未就绪时不阻塞桥接启动：SDK 自带后台重连，DSH 侧照常连接。
+  // 首次连接前确认 WS 令牌，避免 HTTP 令牌被拒后客户端停在握手阶段。
+  await healTokenIfStale('startup');
+
+  // SnowLuma 尚未就绪时不阻塞 DSH：SDK 自带后台重连。
   bot.connect().catch((error) => {
-    // 说明为什么"第一次连不上"在这里几乎是**必然**的，避免用户把它当成故障：
-    // SnowLuma 的 **HTTP token（默认 3000）与 WS token（默认 3001）是两个不同的值**
-    // （实测：同一个账号，两者不同；config.json 只能存一个，存的是 HTTP 那个）。
-    // 所以 WS 首次连接通常会被拒 → close(1006) → 触发 token 自愈（重新发现 WS token）
-    // → 重连成功后才是「SnowLuma 已连接」。若 homeDir 没配/被移动/读不到 SnowLuma 的
-    // config/onebot_<QQ>.json，自愈就无从下手，这时才会一直连不上 —— 那种情况请查
-    // 日志里的「token 自愈失败」与 config.json 的 snowluma.homeDir。
+    // 令牌发现依赖 homeDir 下的账号配置；持续失败时检查该目录和服务状态。
     log(`SnowLuma 首次连接未成功（将在后台自动重连并尝试自愈 WS token）: ${error?.message ?? error}`);
   });
   log('桥接已启动。按 Ctrl+C 退出。');
