@@ -79,6 +79,7 @@
 | 令牌只发回环 | `dsh-client.ensureAuth()` | DSH launch token 换 Cookie 时必须放进 URL，因此**默认拒绝非回环 baseUrl**；远程部署需显式 `dsh.allowRemote: true` |
 | 路径校验（读点） | `roleRawContent()` 等 | 人格名在**读取点**也做 `sanitizeRoleName` + `path.resolve` 包含性校验（`state/current-role.json` 是用户可直接编辑的文件） |
 | 原型污染 | 记忆写入/加载 | `__proto__` / `constructor` / `prototype` 键在写入与加载两侧都被拒绝；配置合并用对象展开（不触发 setter） |
+| owner 视频接收 | `src/receive-video.js` / `handleIncoming()` | 仅 `closed-agent` 的 owner 私聊和同机 DSH；随机文件名落在 `state/incoming-videos/`，不采用消息中的本地路径。文件流限量写入临时文件，成功后 rename，失败清理；单文件/单消息/排队/总容量均有限制。下载后、补投前重新检查权限，本地路径不进入聊天 preset |
 
 ### 6. 与 DSH 沙箱的 ACL 交互（DSH 0.2.0 起；**这是有意的取舍，不是缺陷**）
 
@@ -116,7 +117,7 @@ DSH 的 Windows 文件沙箱按**能力 SID** 授权：SID 由 `sha256(规范化
 
 ### 7. 网络
 
-`src/safe-fetch.js`（仅暴露给 agent 的只读联网）：
+`src/safe-fetch.js`（agent 的只读联网，以及桥接内部的 owner 视频下载）：
 
 - 只允许 `http` / `https`；拒绝 URL 内嵌凭据；拒绝 `file:` / `gopher:` 等 scheme
 - 解析出的**每一个** DNS 结果都要过私有地址判定（含 IPv4-mapped IPv6、NAT64、6to4、ULA、link-local、zone-id、十进制/八进制/十六进制 IPv4）
@@ -124,6 +125,7 @@ DSH 的 Windows 文件沙箱按**能力 SID** 授权：SID 由 `sha256(规范化
 - 每一跳重定向都重新校验，最多 5 跳，重定向响应体立即销毁
 - 响应体大小与图片像素上限；图片按 magic number 校验
 - 不读取任何代理环境变量（不存在 `HTTP_PROXY` 绕过）
+- 视频下载复用上述 DNS/IP/重定向校验，通过 `safeFetchFile()` 流式写盘；它没有作为 MCP 通用下载工具暴露。默认单文件 100 MiB、每条 3 个、最多 10 条待下载、目录 1 GiB，每次下载 120 秒，过期地址最多刷新一次。视频只检查容器标识，不在桥接内解码；详见 [VIDEO_RECEIVE.md](VIDEO_RECEIVE.md)
 
 ---
 
@@ -168,6 +170,7 @@ node --check src/bridge.js  # 语法门禁（大文件改动后必跑）
 - [x] 语音只能取语音库内的文件（含 `allowAbsolutePath=true` 与相对穿越两种情形）
 - [x] 出站文本命中敏感信息时整条拦截；含已知会话令牌时直接抛错
 - [x] SSRF：scheme、URL 凭据、私有 IP、重定向、超时、大小限制（11 项）
+- [x] owner 视频：授权通道、真实落盘、地址刷新、离线补投跨模式隔离、容量限制、连接中断及超时清理（`npm run test:video`）
 - [x] 桥接 `200 + {ok:false}` 会被 MCP 当作失败上报（不产生静默假成功）
 - [x] 旧只读工具在非 `closed-agent` 模式下 fail-closed
 - [x] `state/` ACL 助手：非阻断、防递归、`start.bat` 纯 ASCII+CRLF 且先于桥接调用（**结构级断言**）

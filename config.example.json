@@ -23,6 +23,13 @@
   },
   "ownerQQ": null,
   "sessionCwd": "",
+  "video": {
+    "enabled": true,
+    "maxBytes": 104857600,
+    "maxFilesPerMessage": 3,
+    "maxStoredBytes": 1073741824,
+    "timeoutMs": 120000
+  },
   "agentPreset": "qq-chat",
   "workspaceTitle": "QQ 聊天",
   "allow": {

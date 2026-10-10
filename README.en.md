@@ -27,6 +27,7 @@ QQ messages ──► SnowLuma (OneBot v11 WS) ──► qq-bridge ──► DSH
 ## Features
 
 - Bridges QQ group/private messages to DSH agent sessions.
+- Automatically downloads owner private-chat videos in `closed-agent` mode and passes local file paths to DSH on the same machine. See [video reception](docs/guides/VIDEO_RECEIVE.md); video analysis requires suitable agent tools.
 - Social simulation mode ("simulated group friend") with idle/active/probing/exiting states.
 - Space-based message splitting for more natural multi-message replies.
 - Whitelist/blacklist access control, fail-closed by default.
@@ -65,6 +66,7 @@ Key settings:
 | `snowluma.accessToken` | OneBot access token, leave empty if not configured |
 | `snowluma.httpUrl` | OneBot **HTTP API** URL (e.g. `http://127.0.0.1:3000`); do not point this at the WebSocket port or you will get HTTP 426 |
 | `ownerQQ` | Administrator QQ (highest privilege) |
+| `video` | Owner video reception: `closed-agent` and local DSH only; defaults to 100 MiB/file, 3 files/message and 1 GiB stored. Set `video.enabled` to `false` to disable |
 | `allow.private` / `allow.groups` | Whitelist of QQ/group IDs |
 | `consolePort` | Local console port, default `3100` |
 
