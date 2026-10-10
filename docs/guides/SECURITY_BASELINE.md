@@ -125,7 +125,7 @@ DSH 的 Windows 文件沙箱按**能力 SID** 授权：SID 由 `sha256(规范化
 - 每一跳重定向都重新校验，最多 5 跳，重定向响应体立即销毁
 - 响应体大小与图片像素上限；图片按 magic number 校验
 - 不读取任何代理环境变量（不存在 `HTTP_PROXY` 绕过）
-- 视频下载复用上述 DNS/IP/重定向校验，通过 `safeFetchFile()` 流式写盘；它没有作为 MCP 通用下载工具暴露。默认单文件 100 MiB、每条 3 个、最多 10 条待下载、目录 1 GiB，每次下载 120 秒，过期地址最多刷新一次。视频只检查容器标识，不在桥接内解码；详见 [VIDEO_RECEIVE.md](VIDEO_RECEIVE.md)
+- 四种模式的授权视频下载复用上述 DNS/IP/重定向校验，通过 `safeFetchFile()` 流式写盘；默认单文件 100 MiB、每条 3 个、最多 10 条待下载、目录 1 GiB，每次下载 120 秒。聊天和仿真会话只得到附件编号，专用 `analyze_video` 按编号访问登记附件并调用 Seed；不开放任意路径或 URL。模式、白名单、有效期和文件边界会重新校验。详见 [VIDEO_RECEIVE.md](VIDEO_RECEIVE.md) 与 [VIDEO_ANALYSIS.md](VIDEO_ANALYSIS.md)。
 
 ---
 

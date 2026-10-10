@@ -23,6 +23,8 @@ import { looksLikeUnfinished } from './v2-wait.js';
 import { compactModelMessage } from './qq-model-view.js';
 import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
 import { createVideoReceiver, normalizeVideoConfig } from './receive-video.js';
+import { normalizeVideoAnalysisConfig } from './analyze-video.js';
+import { registerVideoAttachment } from './video-attachments.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
 import { hardenDir, manualDirCommand } from './state-acl.mjs';
@@ -637,6 +639,7 @@ function loadConfig() {
     // 空 => 每个会话在 state/agents/<key> 下建独立工作目录
     sessionCwd: file.sessionCwd ?? '',
     video: normalizeVideoConfig(file.video),
+    videoAnalysis: normalizeVideoAnalysisConfig(file.videoAnalysis),
     agentPreset: file.agentPreset ?? 'qq-chat',
     workspaceTitle: file.workspaceTitle ?? 'QQ 聊天',
     ownerQQ: normalizeOwnerQQ(file.ownerQQ),
@@ -8248,7 +8251,7 @@ async function main() {
     return false;
   }
 
-  function appendRecentMessage(key, sender, textContent, plainText, quoteTargetIsSelf = false, isOwner = false, media = [], messageRef = '') {
+  function appendRecentMessage(key, sender, textContent, plainText, quoteTargetIsSelf = false, isOwner = false, media = [], messageRef = '', videoHint = '') {
     if (!social.recentMessages.has(key)) social.recentMessages.set(key, []);
     const arr = social.recentMessages.get(key);
     arr.push({
@@ -8260,24 +8263,25 @@ async function main() {
       media: Array.isArray(media) ? media : [],
       messageId: messageRef ? String(messageRef) : '',
       hasMedia: Array.isArray(media) && media.length > 0,
+      videoHint,
       time: Date.now()
     });
     const cap = Math.max(50, Number(cfg.social?.contextWindow ?? 15) * 2);
     while (arr.length > cap) arr.shift();
   }
 
-  function appendSummary(key, sender, textContent, plainText, isOwner = false, media = [], messageRef = '') {
+  function appendSummary(key, sender, textContent, plainText, isOwner = false, media = [], messageRef = '', videoHint = '') {
     if (!social.pendingSummaries.has(key)) {
       social.pendingSummaries.set(key, { items: [], since: Date.now() });
     }
     const entry = social.pendingSummaries.get(key);
-    entry.items.push({ sender, text: truncateText(String(textContent), 200), plain: truncateText(String(plainText ?? textContent), 200), isOwner: !!isOwner, media: Array.isArray(media) ? media : [], messageId: messageRef ? String(messageRef) : '', hasMedia: Array.isArray(media) && media.length > 0, time: Date.now() });
+    entry.items.push({ sender, text: truncateText(String(textContent), 200), plain: truncateText(String(plainText ?? textContent), 200), isOwner: !!isOwner, media: Array.isArray(media) ? media : [], messageId: messageRef ? String(messageRef) : '', hasMedia: Array.isArray(media) && media.length > 0, videoHint, time: Date.now() });
     if (entry.items.length > 60) entry.items.shift();
   }
 
   function buildContextBlock(key) {
     const ctx = (social.recentMessages.get(key) ?? []).slice(-Number(cfg.social?.contextWindow ?? 15));
-    return ctx.map((m) => `${m.isOwner ? '【管理员】' : ''}${m.sender}：${m.text}${mediaHintFor(key, m.messageId, m.media)}`).join('\n') || '（无）';
+    return ctx.map((m) => `${m.isOwner ? '【管理员】' : ''}${m.sender}：${m.text}${mediaHintFor(key, m.messageId, m.media)}${m.videoHint || ''}`).join('\n') || '（无）';
   }
 
   // 触发进入活跃（启动阶段 → 活跃阶段）
@@ -8342,7 +8346,7 @@ async function main() {
   // 活跃阶段：只贴"没给过 AI 的新消息"（上下文在会话历史里，不重复贴，不贴人格）
   // allowSilent=false 表示这条必须回（被 @/点名/私聊等），不提供 [SILENT] 出口。
   function buildBatchPrompt(key, newMsgs, allowSilent = true) {
-    const lines = newMsgs.map((m) => `${m.isOwner ? '【管理员】' : ''}${m.sender}：${m.text}${mediaHintFor(key, m.messageId, m.media)}`).join('\n');
+    const lines = newMsgs.map((m) => `${m.isOwner ? '【管理员】' : ''}${m.sender}：${m.text}${mediaHintFor(key, m.messageId, m.media)}${m.videoHint || ''}`).join('\n');
     const directionHint = lines.includes('[引用') ? `${DIRECTION_HINT}\n` : '';
     if (!allowSilent) {
       return `【新消息】\n${lines}\n\n${directionHint}请回复消息。\n${SPACE_SPLIT_HINT}`;
@@ -8669,7 +8673,7 @@ async function main() {
     const targets = key ? (social.pendingSummaries.has(key) ? [[key, social.pendingSummaries.get(key)]] : []) : [...social.pendingSummaries.entries()];
     for (const [k, entry] of targets) {
       if (!entry.items.length) continue;
-      const lines = entry.items.map((m) => `${m.isOwner ? '【管理员】' : ''}${m.sender}：${m.text}${mediaHintFor(k, m.messageId, m.media)}`).join('\n');
+      const lines = entry.items.map((m) => `${m.isOwner ? '【管理员】' : ''}${m.sender}：${m.text}${mediaHintFor(k, m.messageId, m.media)}${m.videoHint || ''}`).join('\n');
       const summaryMedia = entry.items.flatMap((m) => Array.isArray(m.media) ? m.media : []);
       let sessionId;
       try {
@@ -9088,7 +9092,7 @@ async function main() {
   }
 
   // ── 二代仿真模式（reserved2）唤醒调度 ──────────────────────────────────
-  function appendSocialV2Message(key, sender, textContent, plainContent, quoteTargetIsSelf, isOwner, messageId, media = [], userId = null, forwardIds = []) {
+  function appendSocialV2Message(key, sender, textContent, plainContent, quoteTargetIsSelf, isOwner, messageId, media = [], userId = null, forwardIds = [], videoHint = '') {
     const st = getSocialV2State(key);
     const recentLimit = Number(cfg.socialV2?.context?.recentLimit) || 100;
     const unreadLimit = Number(cfg.socialV2?.context?.unreadLimit) || 30;
@@ -9130,6 +9134,7 @@ async function main() {
       hasMedia: safeMedia.length > 0,
       forwardIds: safeForwardIds,
       hasForward: safeForwardIds.length > 0,
+      videoHint,
       time: Date.now()
     };
     st.lastUnreadSeq = msg.seq;
@@ -9897,18 +9902,25 @@ async function main() {
     if (!plainContent && !quoteTargetIsSelf) return;
     const isOwner = String(event.user_id) === String(cfg.ownerQQ ?? '');
     const roleState = readRoleState();
-    const receiveOwnerVideo = async () => {
-      if (currentMode !== 'closed-agent' || kind !== 'private' || !isOwner) return '';
-      const mayReceive = () => currentMode === 'closed-agent' && isSessionAllowedInCurrentMode(key)
-        && String(event.user_id) === String(cfg.ownerQQ ?? '') && incomingEpoch === sessionEpoch;
+    const receiveVideo = async () => {
+      const receivingMode = currentMode;
+      const mayReceive = () => currentMode === receivingMode && isSessionAllowedInCurrentMode(key)
+        && incomingEpoch === sessionEpoch;
       const host = new URL(cfg.dsh.baseUrl).hostname;
       // 本地路径只能交给同机 Harness；远程部署需要另外传输文件。
       if (!['localhost', '127.0.0.1', '[::1]'].includes(host)) return '';
       let hint;
       try {
-        hint = await videoReceiver.receive(event, cfg.video, mayReceive);
+        hint = await videoReceiver.receive(event, cfg.video, mayReceive, attachment => {
+          const attachmentId = registerVideoAttachment({ root: ROOT, filePath: attachment.path, kind, id, mode: receivingMode, ownerQQ: cfg.ownerQQ });
+          const { path: filePath, ...data } = attachment;
+          return { ...data, attachmentId, ...(receivingMode === 'closed-agent' ? { path: filePath } : {}) };
+        });
       } catch {
         hint = '\n【视频附件】视频保存失败，请检查目录权限和磁盘空间后重发。';
+      }
+      if (hint && cfg.videoAnalysis.enabled) {
+        hint += '\n若需要理解视频画面或声音，请调用 mcp__video-analysis__analyze_video，attachmentId 使用上面的附件编号，question 使用用户的问题。未附文字时先给出带时间点的内容概述。只有工具成功返回才可描述内容；工具失败时明确说明，不用文件头或猜测代替视觉分析。';
       }
       return mayReceive() ? hint : null;
     };
@@ -9917,7 +9929,7 @@ async function main() {
     // 审批只有管理员消息会被消费；群友消息不能因为“审批挂起”而被吞掉，应继续走正常处理。
     const p = pending.get(key);
     if (p && (p.kind === 'question' || isOwner)) {
-      const answerVideo = p.kind === 'question' ? await receiveOwnerVideo() : '';
+      const answerVideo = p.kind === 'question' ? await receiveVideo() : '';
       if (answerVideo === null || pending.get(key) !== p) return;
       await handlePendingAnswer(p, plainContent + answerVideo, key, isOwner);
       return;
@@ -10028,10 +10040,14 @@ async function main() {
       // 其余 / 开头内容照常发给 DSH（DSH 的斜杠命令原样执行，如 /model）
     }
 
+    const videoHint = await receiveVideo();
+    if (videoHint === null) return;
+    const ownerVideo = !!videoHint && currentMode === 'closed-agent';
+
     // 二代仿真模式（reserved2）：唤醒调度
     if (currentMode === 'reserved2') {
       const sender = kind === 'group' ? (event.sender?.card || event.sender?.nickname || String(event.user_id)) : '私聊';
-      appendSocialV2Message(key, sender, textContent, plainContent, quoteTargetIsSelf, isOwner, event.message_id ?? event.msg_id ?? null, mediaList, event.user_id ?? null, extractForwardIds(event.message ?? []));
+      appendSocialV2Message(key, sender, textContent, plainContent, quoteTargetIsSelf, isOwner, event.message_id ?? event.msg_id ?? null, mediaList, event.user_id ?? null, extractForwardIds(event.message ?? []), videoHint);
       // 二代同样收集群聊黑话学习素材（AI 自主提交之外，桥接仍自动提取高频陌生词）
       if (kind === 'group') feedSlangWindow(key, sender, plainContent);
       if (socialV2.paused) {
@@ -10063,8 +10079,6 @@ async function main() {
 
     // 群聊里带发送者信息，私聊不用；角色提示注入到消息开头（agent 可见）；
     // 管理员消息带身份标记（供 agent 识别，但其权限仍受工具面硬限制）
-    const videoHint = await receiveOwnerVideo();
-    if (videoHint === null) return;
     const promptText = (roleHint ? roleHint + '\n\n' : '')
       + (isOwner ? '【管理员】' : '')
       + (kind === 'group'
@@ -10078,19 +10092,19 @@ async function main() {
     // 仿真群友模式：reserved 走状态机（观望/活跃/试探/退场）
     if (isSocialEnabled()) {
       const sender = kind === 'group' ? (event.sender?.card || event.sender?.nickname || String(event.user_id)) : '私聊';
-      appendRecentMessage(key, sender, textContent, plainContent, quoteTargetIsSelf, isOwner, mediaList, messageRef); // AI 始终感知
+      appendRecentMessage(key, sender, textContent, plainContent, quoteTargetIsSelf, isOwner, mediaList, messageRef, videoHint);
       const st = socialState(key);
 
       // 退场中：收尾发言发出前不再接话，新消息进入摘要
       if (st.phase === 'exiting') {
-        appendSummary(key, sender, textContent, plainContent, isOwner, mediaList, messageRef);
+        appendSummary(key, sender, textContent, plainContent, isOwner, mediaList, messageRef, videoHint);
         log(`社交模式：${key} 退场中，新消息转入摘要`);
         return;
       }
 
       // 活跃超时：即使群里一直有人说话，到达随机上限后也主动收尾退场
       if (st.phase === 'active' && triggerActiveDurationExit(key, st, Date.now())) {
-        appendSummary(key, sender, textContent, plainContent, isOwner, mediaList, messageRef);
+        appendSummary(key, sender, textContent, plainContent, isOwner, mediaList, messageRef, videoHint);
         log(`社交模式：${key} 活跃超时退场中，新消息转入摘要`);
         return;
       }
@@ -10102,7 +10116,7 @@ async function main() {
         st.probeDeadline = 0;
         // 私聊：发给你就是叫你，直接即时投递，不等轮询、不参与沉默
         if (kind === 'private') {
-          const promptText = `${roleHint ? roleHint + '\n\n' : ''}${isOwner ? '【管理员】' : ''}${textContent}${mediaHintFor(key, messageRef, mediaList)}`;
+          const promptText = `${roleHint ? roleHint + '\n\n' : ''}${isOwner ? '【管理员】' : ''}${textContent}${mediaHintFor(key, messageRef, mediaList)}${videoHint}`;
           scheduleSocialReply(
             key, promptText,
             Number(cfg.social?.activeReplyDelayMinMs ?? 2000),
@@ -10123,7 +10137,7 @@ async function main() {
       const direct = isDirectAddress(plainContent, event, kind) || quoteTargetIsSelf;
       const randomTrigger = Math.random() < Number(cfg.social?.triggerProbability ?? 0.15);
       if (!direct && !randomTrigger) {
-        appendSummary(key, sender, textContent, plainContent, isOwner, mediaList, messageRef);
+        appendSummary(key, sender, textContent, plainContent, isOwner, mediaList, messageRef, videoHint);
         log(`社交模式：观望中未触发 ${key}（${sender}：${plainContent.slice(0, 40)}）`);
         return;
       }
@@ -10136,7 +10150,7 @@ async function main() {
       const replyInstruction = direct
         ? `请回复消息。\n${directionHint}${SPACE_SPLIT_HINT}`
         : `请根据情况决定是否回复。如果不需要回应、想潜水/不接话，请只输出 ${SILENT_MARKER}；否则正常回复。\n${directionHint}${SPACE_SPLIT_HINT}`;
-      const promptText = `${roleHint ? roleHint + '\n\n' : ''}【群聊上下文】\n${buildContextBlock(key)}\n【当前消息】${currentLine}${mediaHintFor(key, messageRef, mediaList)}\n\n${replyInstruction}`;
+      const promptText = `${roleHint ? roleHint + '\n\n' : ''}【群聊上下文】\n${buildContextBlock(key)}\n【当前消息】${currentLine}${mediaHintFor(key, messageRef, mediaList)}${videoHint}\n\n${replyInstruction}`;
       if (isOwner && kind === 'private') {
         log(`社交模式：管理员私聊触发，立即投递 ${key}`);
         await deliverPrompt(key, promptText, { media: mediaList });
@@ -10160,7 +10174,7 @@ async function main() {
         items.shift();
         log(`队列满（${QUEUE_MAX}），丢弃最旧消息 (${key})`);
       }
-      items.push({ promptText, media: mediaList, ownerVideo: !!videoHint });
+      items.push({ promptText, media: mediaList, ownerVideo });
       queued.set(key, items);
       const now = Date.now();
       if ((queuedHintAt.get(key) ?? 0) + QUEUE_HINT_COOLDOWN_MS < now) {
@@ -10176,7 +10190,7 @@ async function main() {
       sessionId = await ensureSession(key);
     } catch (error) {
       if (String(error?.message ?? error).includes('会话创建期间已重置')) {
-        enqueueForRetry(key, promptText, { media: mediaList, ownerVideo: !!videoHint });
+        enqueueForRetry(key, promptText, { media: mediaList, ownerVideo });
         return;
       }
       throw error;
@@ -10186,7 +10200,7 @@ async function main() {
       const imageParts = await resolveMediaList(mediaList);
       content = [{ type: 'text', text: withSlangContext(promptText) }, ...imageParts];
     }
-    if (videoHint && (currentMode !== 'closed-agent' || key !== `private:${cfg.ownerQQ}`)) return;
+    if (ownerVideo && (currentMode !== 'closed-agent' || key !== `private:${cfg.ownerQQ}`)) return;
     if (!isCurrentSession(key, sessionId)) throw new Error('投递前会话已重置或权限已变化');
     const accepted = await api.sessions.prompt({
       sessionId,

@@ -76,7 +76,7 @@ export function createVideoReceiver({ directory, request, downloadFile = safeFet
   let tail = Promise.resolve();
   let pending = 0;
 
-  async function download(videos, event, options, isAllowed) {
+  async function download(videos, event, options, isAllowed, describeAttachment) {
     if (!isAllowed()) return '';
     const lines = [];
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
@@ -90,10 +90,10 @@ export function createVideoReceiver({ directory, request, downloadFile = safeFet
         const resolveUrl = async (refresh) => {
           if (!refresh && video.url) return video.url;
           if (video.type === 'file') {
-            if (!video.fileId || !video.fileHash) throw new Error('视频文件缺少 file_id 或 file_hash，请重新发送');
-            const data = oneBotData(await request('get_private_file_url', {
-              user_id: event.user_id, file_id: video.fileId, file_hash: video.fileHash,
-            }, { timeoutMs: 15000 }));
+            if (!video.fileId || (!event.group_id && !video.fileHash)) throw new Error('视频文件缺少 file_id 或 file_hash，请重新发送');
+            const data = oneBotData(await request(event.group_id ? 'get_group_file_url' : 'get_private_file_url', event.group_id
+              ? { group_id: event.group_id, file_id: video.fileId }
+              : { user_id: event.user_id, file_id: video.fileId, file_hash: video.fileHash }, { timeoutMs: 15000 }));
             if (!data?.url) throw new Error('SnowLuma 未提供视频文件下载地址');
             return data.url;
           }
@@ -102,6 +102,8 @@ export function createVideoReceiver({ directory, request, downloadFile = safeFet
           const data = oneBotData(await request('get_msg', { message_id: messageId }, { timeoutMs: 15000 }));
           const sender = data?.user_id ?? data?.sender?.user_id;
           if (sender != null && String(sender) !== String(event.user_id)) throw new Error('刷新的视频消息发送者不一致');
+          if (event.group_id != null && String(data?.group_id ?? '') !== String(event.group_id)) throw new Error('刷新的视频消息群归属不一致');
+          if (event.group_id == null && data?.group_id != null) throw new Error('刷新的视频消息不是私聊');
           const refreshed = incomingVideos(data?.message)[index];
           if (!refreshed || refreshed.type !== 'video' || (video.file && refreshed.file !== video.file)) throw new Error('刷新的视频消息不一致');
           if (!refreshed.url) throw new Error('SnowLuma 未提供视频下载地址，请检查网关或改用文件发送');
@@ -123,7 +125,7 @@ export function createVideoReceiver({ directory, request, downloadFile = safeFet
         }
         if (!isAllowed()) { await fs.rm(destination, { force: true }); return ''; }
         if (!await hasVideoContainer(destination)) throw new Error('下载内容不是支持的视频容器');
-        lines.push(JSON.stringify({ name: video.name, path: destination, size: result.size }));
+        lines.push(JSON.stringify(await describeAttachment({ name: video.name, path: destination, size: result.size })));
       } catch (error) {
         await fs.rm(destination, { force: true });
         lines.push(JSON.stringify({ name: video.name, error: String(error?.message ?? error).slice(0, 200) }));
@@ -135,12 +137,12 @@ export function createVideoReceiver({ directory, request, downloadFile = safeFet
   }
 
   return {
-    async receive(event, options, isAllowed) {
+    async receive(event, options, isAllowed, describeAttachment = value => value) {
       const videos = incomingVideos(event.message);
       if (!videos.length || !options.enabled || !isAllowed()) return '';
       if (pending >= 10) return '\n【视频附件】下载队列已满，视频未下载，请稍后重发。';
       pending++;
-      const task = tail.then(() => download(videos, event, options, isAllowed));
+      const task = tail.then(() => download(videos, event, options, isAllowed, describeAttachment));
       tail = task.catch(() => {});
       try { return await task; }
       finally { pending--; }

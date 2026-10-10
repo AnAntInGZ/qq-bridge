@@ -154,19 +154,54 @@ await test('同名视频使用独立路径，文件名不能穿越目录', async
   assert.equal(path.dirname(a.path), path.dirname(b.path));
 });
 
-await test('非 owner、群聊及所有聊天模式都不触发视频下载', async (t) => {
+await test('closed-agent 仍拒绝非 owner 和群聊视频', async (t) => {
   const requests = transport(t, []);
   const h = await harness(t);
   await h.handleIncoming('private', 124, videoEvent({}, { user_id: 124 }), h.cfg);
   await h.handleIncoming('group', 456, videoEvent({}, { group_id: 456 }), h.cfg);
   assert.equal(h.calls.prompts.length, 0);
-  for (const mode of ['chat', 'reserved', 'reserved2']) {
-    h.setMode(mode);
-    await h.handleIncoming('private', 123, videoEvent(), h.cfg);
-  }
   assert.equal(requests.length, 0);
   assert.ok(!fs.existsSync(path.join(h.temp, 'state', 'incoming-videos')));
   assert.ok(h.calls.prompts.every((p) => !p.content[0].text.includes('收到的视频附件')));
+});
+
+await test('聊天和两代仿真都接收视频；群聊、非 owner 白名单私聊不暴露本机路径', async (t) => {
+  const requests = transport(t, [{}, {}, {}, {}, {}]);
+  const h = await harness(t, { allow: { private: ['123', '124'], groups: ['456'] }, videoAnalysis: { enabled: true } });
+  for (const mode of ['chat', 'reserved', 'reserved2']) {
+    h.setMode(mode);
+    await h.handleIncoming('private', 124, videoEvent({}, { user_id: 124 }), h.cfg);
+    let text;
+    if (mode === 'reserved2') text = h.buildWakeSnapshotV2('private:124').messages.at(-1).videoHint;
+    else if (mode === 'reserved') text = h.buildContextBlock('private:124');
+    else text = h.calls.prompts.at(-1).content[0].text;
+    assert.match(text, /attachmentId/);
+    assert.match(text, /mcp__video-analysis__analyze_video/);
+    assert.doesNotMatch(text, /"path"|incoming-videos|\/Users\//);
+  }
+  h.setMode('chat');
+  await h.handleIncoming('group', 456, videoEvent({}, { group_id: 456, user_id: 124 }), h.cfg);
+  const file = attachment(h.calls.prompts.at(-1));
+  assert.ok(file.attachmentId);
+  assert.equal(file.path, undefined);
+  await h.handleIncoming('group', 789, videoEvent({}, { group_id: 789 }), h.cfg);
+  assert.equal(requests.length, 4);
+});
+
+await test('群聊视频文件使用群文件下载接口，刷新原生视频检查群归属', async (t) => {
+  transport(t, [{}]);
+  const h = await harness(t);
+  h.setMode('chat');
+  const actions = [];
+  h.bot.request = async (action, params) => {
+    actions.push({ action, params });
+    return { status: 'ok', retcode: 0, data: { url: PUBLIC } };
+  };
+  await h.handleIncoming('group', 456, videoEvent({}, { group_id: 456, message: [{ type: 'file', data: { name: 'clip.mp4', file_id: 'group-file' } }] }), h.cfg);
+  assert.deepEqual(actions, [{ action: 'get_group_file_url', params: { group_id: 456, file_id: 'group-file' } }]);
+  h.bot.request = async () => ({ status: 'ok', retcode: 0, data: videoEvent({}, { group_id: 789 }) });
+  await h.handleIncoming('group', 456, videoEvent({ url: '' }, { group_id: 456 }), h.cfg);
+  assert.match(attachment(h.calls.prompts.at(-1)).error, /群归属/);
 });
 
 await test('关闭接收或使用远程 Harness 时不写入本地附件', async (t) => {

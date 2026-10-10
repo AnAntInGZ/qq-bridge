@@ -16,11 +16,11 @@ for (const preset of ['qq-chat', 'qq-chat-v2']) {
   assert.equal(typeof guard, 'function');
   assert.ok(restricted.includes('dev_install_package'));
   for (const name of ['ask_user_question', 'todo_write', 'mcp__snowluma__qq_send_message',
-    'mcp__snowluma-host__snowluma_status', 'mcp__web-search-safe__web_fetch']) {
+    'mcp__snowluma-host__snowluma_status', 'mcp__web-search-safe__web_fetch', 'mcp__video-analysis__analyze_video']) {
     assert.equal(guard({ name }), undefined, `${preset}: expected allowed ${name}`);
   }
   for (const name of ['web_fetch', 'web_search', 'bash', 'read_file', 'dev_future_tool',
-    'mcp__untrusted__web_fetch', '', null, undefined]) {
+    'mcp__untrusted__web_fetch', 'mcp__video-analysis__read_file', '', null, undefined]) {
     try { assert.equal(typeof guard({ name }), 'string', `${preset}: must reject ${String(name)}`); }
     catch (error) { failures++; console.error(`FAIL ${error.message}`); }
   }

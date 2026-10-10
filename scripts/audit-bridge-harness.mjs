@@ -13,6 +13,8 @@ import * as sensitive from '../src/sensitive.js';
 import * as wait from '../src/v2-wait.js';
 import * as safeFetch from '../src/safe-fetch.js';
 import * as receiveVideo from '../src/receive-video.js';
+import * as analyzeVideo from '../src/analyze-video.js';
+import * as videoAttachments from '../src/video-attachments.js';
 import * as roleCard from '../src/role-card.js';
 import * as forward from '../src/forward.js';
 import * as slang from '../src/slang-learner.js';
@@ -109,7 +111,7 @@ export async function bridgeHarness({ config = {}, savedState, globals = {} } = 
     sendToQQ, sendStickerV2, handleIncoming, startConsoleServer, cfg, state, api, bot, queued, promptQueues,
     getSocialV2State, appendSocialV2Message, recordSentMessagesV2,
     buildWakePromptV2, buildWakeSnapshotV2, sendWakePromptV2, socialV2,
-    flushQueue, retireSession, pending,
+    flushQueue, retireSession, pending, social, buildContextBlock,
     voiceCfg, voiceLibrary, resolveVoicePathForV2, resolveVoicePathForOperator,
     voiceBudgetCheck, sendVoiceV2, sendVoiceForV2, assertOutboundAuditOk,
     setMode(value) { currentMode = value; },
@@ -133,7 +135,7 @@ export async function bridgeHarness({ config = {}, savedState, globals = {} } = 
     NodeApiClient: class { constructor() { return api; } },
     SnowLumaWebSocketClient: FakeBot, text: (s) => s,
     discoverDshLaunchToken: () => '', unwrap, createTurnCollector,
-    ...markdown, ...sensitive, ...wait, ...safeFetch, ...receiveVideo, ...roleCard, ...forward, ...slang, ...sticker,
+    ...markdown, ...sensitive, ...wait, ...safeFetch, ...receiveVideo, ...analyzeVideo, ...videoAttachments, ...roleCard, ...forward, ...slang, ...sticker,
     ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl,
     // ACL 收紧会 spawn icacls 去改**真实**文件系统；测试不该做这件事（同理见下面的
     // cleanupTemp / processAudioVolume 桩）。桩成成功，让 hardenStateDirAcl 走正常分支。
