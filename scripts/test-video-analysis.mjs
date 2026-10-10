@@ -66,6 +66,9 @@ await test('上传完整原视频、带模型和帧率预处理，引用文件�
   assert.doesNotMatch(upload.bytes.toString(), new RegExp(f.root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   const body = JSON.parse(f.calls[2].init.body);
   assert.equal(body.store, false);
+  const uploadedExpiry = Number(upload.bytes.toString().match(/name="expire_at"\r\n\r\n(\d+)/)[1]);
+  assert.ok(uploadedExpiry >= Date.now() / 1000 + 86400 + f.config.timeoutMs / 1000);
+  assert.ok(body.expire_at > Date.now() / 1000 && body.expire_at < uploadedExpiry);
   assert.equal(body.thinking.type, 'disabled');
   assert.equal(body.input[0].content[0].file_id, ID);
   assert.match(body.instructions, /声音/);
@@ -127,6 +130,18 @@ await test('鉴权错误正文和网络异常不泄漏密钥或请求地址', as
       return true;
     });
   }
+});
+
+await test('未开通模型时给出可操作提示，不回传服务端账号与错误正文', async t => {
+  const f = fixture(t);
+  const analyze = createVideoAnalyzer({ root: f.root, fetchImpl: async () =>
+    Response.json({ error: { code: 'ModelNotOpen', message: KEY + f.root + 'private-account' } }, { status: 404 }) });
+  await assert.rejects(analyze(f.args), error => {
+    assert.match(error.message, /模型尚未开通/);
+    assert.doesNotMatch(error.message, /private-account|fixture-only/);
+    assert.ok(!error.message.includes(f.root));
+    return true;
+  });
 });
 
 await test('处理失败、输出不完整或输出泄密时仍删除远端文件', async t => {
