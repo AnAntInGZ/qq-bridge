@@ -66,7 +66,8 @@ Key settings:
 | `snowluma.accessToken` | OneBot access token, leave empty if not configured |
 | `snowluma.httpUrl` | OneBot **HTTP API** URL (e.g. `http://127.0.0.1:3000`); do not point this at the WebSocket port or you will get HTTP 426 |
 | `ownerQQ` | Administrator QQ (highest privilege) |
-| `video` | Owner video reception: `closed-agent` and local DSH only; defaults to 100 MiB/file, 3 files/message and 1 GiB stored. Set `video.enabled` to `false` to disable |
+| `video` | Authorized video reception in all four modes with local DSH; defaults to 100 MiB/file, 3 files/message and 1 GiB stored. Set `video.enabled` to `false` to disable |
+| `videoAnalysis` | Optional Seed analysis; configure the separate API account and private key file as described in [video analysis](docs/guides/VIDEO_ANALYSIS.md) |
 | `allow.private` / `allow.groups` | Whitelist of QQ/group IDs |
 | `consolePort` | Local console port, default `3100` |
 
