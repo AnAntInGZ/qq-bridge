@@ -6,6 +6,9 @@
 | --- | --- |
 | [FOLDER_MAP.md](FOLDER_MAP.md) | 目录职责、脚本分类、源文件与生成物位置 |
 | [guides/HARNESS.md](guides/HARNESS.md) | 开发入口、代码与测试导航、统一检查、隔离夹具、已知基线失败 |
+| [guides/AUTONOMOUS_CHARACTER.md](guides/AUTONOMOUS_CHARACTER.md) | DeepSeek 自主角色方案：yuiju 参考、模块、状态与活动、B 站、安卓模拟器游戏、P0—P5 验收 |
+| [guides/CONTEXT.md](guides/CONTEXT.md) | 自主角色术语：角色、会话、意图、活动、经历、记忆、心情和信息范围 |
+| [plans/2026-10-19-autonomous-character.md](plans/2026-10-19-autonomous-character.md) | 设计任务交接、已确认需求、待定事项与下一次对话入口 |
 | [guides/VIDEO_RECEIVE.md](guides/VIDEO_RECEIVE.md) | 四种模式的 QQ 视频接收、附件权限、下载限制与验收 |
 | [guides/VIDEO_ANALYSIS.md](guides/VIDEO_ANALYSIS.md) | Seed 视频画面与音轨分析、密钥配置、附件授权与清理 |
 | [guides/DSH_SETUP.md](guides/DSH_SETUP.md) | 在目标设备安装预设、插件与 MCP；会修改真实 DSH 配置 |
