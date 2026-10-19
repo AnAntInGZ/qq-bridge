@@ -211,9 +211,20 @@ npm start          # 或双击 start.bat（守护模式：崩溃自动重启，�
 12:00:20 [bridge] agent 回复 (private:12345678) 42 字
 ```
 
+## Agent 开发
+
+开发约定见 [AGENTS.md](AGENTS.md)，代码导航、隔离夹具和已知测试基线见 [开发指南](docs/guides/HARNESS.md)。
+
+```sh
+npm ci
+npm run check
+```
+
+统一检查包含语法、预设产物、独立会话路由测试、审计回归与隐私扫描。现有审计在无 DSH 的 macOS 环境仍有基线失败，详见开发指南；普通开发验证不需要启动真实桥接。
+
 ## 自测（不需要 SnowLuma / QQ）
 
-离线回归（使用临时目录和模拟服务，不读取真实配置、不发 QQ 消息）：
+回归套件使用临时目录和模拟服务，不发 QQ 消息；目前仍有平台与本机依赖缺口，已在开发指南记录：
 
 ```bash
 npm run test:audit
