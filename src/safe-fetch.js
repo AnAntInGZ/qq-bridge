@@ -9,6 +9,9 @@ import dns from 'node:dns';
 import net from 'node:net';
 import http from 'node:http';
 import https from 'node:https';
+import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { Transform, pipeline } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 
 const dnsLookup = dns.promises.lookup;
@@ -156,11 +159,12 @@ function validateLimit(value, name) {
 
 // 使用已校验的 IP 发起请求，保留原始 Host/SNI，禁止重新解析 DNS。
 // 总时限包含 TCP/TLS、响应头和响应体；仅 socket idle timeout 无法阻止慢速滴流。
-function requestOnce(url, ip, limit, binary = false) {
+function requestOnce(url, ip, limit, binary = false, { filePath, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let req;
     let response;
+    let fileStreaming = false;
     const finish = (error, result) => {
       if (settled) return;
       settled = true;
@@ -170,10 +174,10 @@ function requestOnce(url, ip, limit, binary = false) {
     };
     const timer = setTimeout(() => {
       const error = new Error(`请求超时：${url.hostname}`);
-      finish(error);
+      if (!fileStreaming) finish(error);
       req?.destroy(error);
-      response?.destroy();
-    }, REQUEST_TIMEOUT_MS);
+      response?.destroy(error);
+    }, timeoutMs);
     const mod = url.protocol === 'https:' ? https : http;
     const hostname = url.hostname.replace(/^\[|\]$/g, '');
     try {
@@ -185,18 +189,18 @@ function requestOnce(url, ip, limit, binary = false) {
         headers: {
           host: url.host,
           'user-agent': 'Mozilla/5.0',
-          accept: binary ? 'image/*,*/*;q=0.8' : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          accept: filePath ? '*/*' : binary ? 'image/*,*/*;q=0.8' : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           'accept-language': 'zh-CN,zh;q=0.9',
         },
         servername: url.protocol === 'https:' && !net.isIP(hostname) ? hostname : undefined,
         rejectUnauthorized: url.protocol === 'https:',
-        timeout: REQUEST_TIMEOUT_MS,
+        timeout: timeoutMs,
       }, (res) => {
         response = res;
-        res.on('error', (error) => finish(error));
-        res.on('aborted', () => finish(new Error('响应体读取中断')));
+        res.on('error', (error) => { if (!fileStreaming) finish(error); });
+        res.on('aborted', () => { if (!fileStreaming) finish(new Error('响应体读取中断')); });
         res.on('close', () => {
-          if (!res.complete) finish(new Error('响应体读取中断'));
+          if (!fileStreaming && !res.complete) finish(new Error('响应体读取中断'));
         });
         if (settled) { res.destroy(); return; }
         const statusCode = res.statusCode || 0;
@@ -204,6 +208,31 @@ function requestOnce(url, ip, limit, binary = false) {
           finish(null, { statusCode, redirect: String(res.headers.location || '') });
           // 不下载重定向正文：攻击者可以发送无限正文消耗连接和带宽。
           res.destroy();
+          return;
+        }
+        if (filePath) {
+          if (statusCode < 200 || statusCode >= 300) {
+            finish(null, { statusCode });
+            res.destroy();
+            return;
+          }
+          const declaredSize = Number(res.headers['content-length']);
+          if (declaredSize > limit) {
+            finish(new Error(`文件超过大小限制（${limit} 字节）`));
+            res.destroy();
+            return;
+          }
+          let size = 0;
+          const capped = new Transform({
+            transform(chunk, encoding, callback) {
+              size += chunk.length;
+              callback(size > limit ? new Error(`文件超过大小限制（${limit} 字节）`) : null, chunk);
+            },
+          });
+          // 流式写入临时文件，避免整段视频占用内存；写完后才允许上层使用。
+          const output = fs.createWriteStream(filePath, { flags: 'wx', mode: 0o600 });
+          fileStreaming = true;
+          pipeline(res, capped, output, (error) => finish(error, { statusCode, size }));
           return;
         }
         const chunks = [];
@@ -241,17 +270,47 @@ function requestOnce(url, ip, limit, binary = false) {
       });
       req.on('timeout', () => {
         const error = new Error(`请求超时：${url.hostname}`);
-        finish(error);
+        if (!fileStreaming) finish(error);
         req.destroy(error);
-        response?.destroy();
+        response?.destroy(error);
       });
-      req.on('error', (error) => finish(error));
+      req.on('error', (error) => {
+        if (fileStreaming) response?.destroy(error);
+        else finish(error);
+      });
       req.end();
     } catch (error) {
       finish(error);
       req?.destroy();
     }
   });
+}
+
+export async function safeFetchFile(urlString, destination, { maxBytes = 100 * 1024 * 1024, timeoutMs = 120000 } = {}) {
+  validateLimit(maxBytes, 'maxBytes');
+  validateLimit(timeoutMs, 'timeoutMs');
+  const temporary = `${destination}.part-${randomUUID()}`;
+  const deadline = Date.now() + timeoutMs;
+  try {
+    let { url, ip } = await validateFetchUrl(urlString);
+    for (let i = 0; i <= 5; i++) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error('文件下载超时');
+      const result = await requestOnce(url, ip, maxBytes, true, { filePath: temporary, timeoutMs: remaining });
+      if (REDIRECT_STATUSES.has(result.statusCode)) {
+        if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
+        ({ url, ip } = await validateFetchUrl(new URL(result.redirect, url).toString()));
+        continue;
+      }
+      if (result.statusCode < 200 || result.statusCode >= 300) throw new Error(`文件下载失败：HTTP ${result.statusCode}`);
+      if (!result.size) throw new Error('下载文件为空');
+      await fs.promises.rename(temporary, destination);
+      return { size: result.size };
+    }
+    throw new Error('重定向次数过多，已停止');
+  } finally {
+    await fs.promises.rm(temporary, { force: true });
+  }
 }
 
 export async function safeFetch(urlString, maxChars = 50000) {

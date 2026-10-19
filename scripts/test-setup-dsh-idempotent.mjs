@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { dshModulesDir } from './dsh-modules.mjs';
+import { fileURLToPath } from 'node:url';
+import yaml from 'js-yaml';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // 夹具放系统临时目录，**不要**放仓库的 state/：harden-state-acl.mjs 会把 state/ 的
@@ -70,7 +70,7 @@ const finalPatch = fs.readFileSync(path.join(tmpHome, 'profiles', 'web', 'cordis
 
 // 断言 1：每个托管 id 恰好出现一次
 let failed = 0;
-for (const id of ['mcp-snowluma', 'mcp-snowluma-host', 'mcp-web-search-safe']) {
+for (const id of ['mcp-snowluma', 'mcp-snowluma-host', 'mcp-web-search-safe', 'mcp-video-analysis']) {
   const n = finalPatch.split('\n').filter((l) => new RegExp(`^\\s*-\\s*id:\\s*${id}\\s*$`).test(l)).length;
   const ok = n === 1;
   if (!ok) failed += 1;
@@ -88,8 +88,6 @@ console.log(`${hasBareArray ? '❌' : '✅'} 无独立成行的空数组 []`);
 if (hasBareArray) failed += 1;
 
 // 断言 4：YAML 可解析且顶层是数组
-const YAML = await import(pathToFileURL(path.join(dshModulesDir(), 'js-yaml/index.js')).href);
-const yaml = YAML.default ?? YAML;
 let doc;
 try { doc = yaml.load(finalPatch); } catch (e) {
   console.log(`❌ YAML 解析失败: ${e.message}`); failed += 1;

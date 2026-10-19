@@ -166,9 +166,10 @@ const SAFE_PREFIXES = [
   'mcp__web-search-safe__',
 ]
 
-// 无害模型侧工具：ask_user_question 用于把问题转给管理员/用户，
-// todo_write 仅维护任务列表。若后续 preset 不再挂载这些工具，保留无害。
+// 视频分析只接受桥接生成的附件编号，不开放本地文件路径。
+// 其余两个工具用于提问和维护任务列表。
 const SAFE_EXACT = new Set([
+  'mcp__video-analysis__analyze_video',
   'ask_user_question',
   'todo_write',
 ])

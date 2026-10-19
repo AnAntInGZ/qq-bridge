@@ -38,7 +38,7 @@
 
 | 机制 | 位置 | 行为 |
 | --- | --- | --- |
-| 预设工具守卫 | `plugins/qq-agent-presets/qq-tool-restrict.mjs`（唯一权威实现，`dsh/agent-presets/*/qq-tool-restrict.mjs` 只是 re-export 壳） | 两道闸门：① 注册期 `tools.restrict({deny})` 把本地执行/宿主运行期工具**从模型 schema 里隐藏**（67 个名字，2026-09-29 按 DSH 0.2.0-rc.2 真实工具清单重新对账）；② 执行期 `tools.guard` 精确白名单：仅 `mcp__snowluma__*` / `mcp__snowluma-host__*` / `mcp__web-search-safe__*` + `ask_user_question` / `todo_write`；空/未知名字一律拒绝；内置 `tool-web` 的 search/fetch 关闭。对账工具：`npm run scan:tool-names`（**每次升级 DSH 后应跑一次**：`tools.restrict` 对不存在的名字会抛错并被逐个 try/catch 吞掉 ⇒ 假名 = 静默失效；新版本新增的能力若不补进名单 = 漏隐藏） |
+| 预设工具守卫 | `plugins/qq-agent-presets/qq-tool-restrict.mjs`（唯一权威实现，`dsh/agent-presets/*/qq-tool-restrict.mjs` 只是 re-export 壳） | 两道闸门：① 注册期 `tools.restrict({deny})` 把本地执行/宿主运行期工具**从模型 schema 里隐藏**（67 个名字，2026-09-29 按 DSH 0.2.0-rc.2 真实工具清单重新对账）；② 执行期 `tools.guard` 精确白名单：仅 `mcp__snowluma__*` / `mcp__snowluma-host__*` / `mcp__web-search-safe__*` + 专用 `mcp__video-analysis__analyze_video` + `ask_user_question` / `todo_write`；空/未知名字一律拒绝；内置 `tool-web` 的 search/fetch 关闭。对账工具：`npm run scan:tool-names`（**每次升级 DSH 后应跑一次**：`tools.restrict` 对不存在的名字会抛错并被逐个 try/catch 吞掉 ⇒ 假名 = 静默失效；新版本新增的能力若不补进名单 = 漏隐藏） |
 | 预设 fail-closed | `resolvePresetName()` + `ensureSession()` | 群聊/仿真会话拿不到受限预设时**拒绝建会话**，绝不回退到含本地工具的 DSH 默认预设；只有 `closed-agent`（管理员私聊）允许回退 |
 | 发送强制白名单 | 所有 `/api/send/*`、`/api/socialV2/send-*` | 目标必须命中 `allow.groups` / `allow.private`（每次都重新校验，不做缓存） |
 | 动态 ACL | `resolveVoicePathForV2()` / `voicePathInsideLibrary()` | 语音只能取语音库目录内的文件；贴纸只能发收藏库内的表情；图片只能读 SnowLuma home 内的本地文件（realpath 复核防符号链接逃逸） |
@@ -79,6 +79,7 @@
 | 令牌只发回环 | `dsh-client.ensureAuth()` | DSH launch token 换 Cookie 时必须放进 URL，因此**默认拒绝非回环 baseUrl**；远程部署需显式 `dsh.allowRemote: true` |
 | 路径校验（读点） | `roleRawContent()` 等 | 人格名在**读取点**也做 `sanitizeRoleName` + `path.resolve` 包含性校验（`state/current-role.json` 是用户可直接编辑的文件） |
 | 原型污染 | 记忆写入/加载 | `__proto__` / `constructor` / `prototype` 键在写入与加载两侧都被拒绝；配置合并用对象展开（不触发 setter） |
+| owner 视频接收 | `src/receive-video.js` / `handleIncoming()` | 仅 `closed-agent` 的 owner 私聊和同机 DSH；随机文件名落在 `state/incoming-videos/`，不采用消息中的本地路径。文件流限量写入临时文件，成功后 rename，失败清理；单文件/单消息/排队/总容量均有限制。下载后、补投前重新检查权限，本地路径不进入聊天 preset |
 
 ### 6. 与 DSH 沙箱的 ACL 交互（DSH 0.2.0 起；**这是有意的取舍，不是缺陷**）
 
@@ -116,7 +117,7 @@ DSH 的 Windows 文件沙箱按**能力 SID** 授权：SID 由 `sha256(规范化
 
 ### 7. 网络
 
-`src/safe-fetch.js`（仅暴露给 agent 的只读联网）：
+`src/safe-fetch.js`（agent 的只读联网，以及桥接内部的 owner 视频下载）：
 
 - 只允许 `http` / `https`；拒绝 URL 内嵌凭据；拒绝 `file:` / `gopher:` 等 scheme
 - 解析出的**每一个** DNS 结果都要过私有地址判定（含 IPv4-mapped IPv6、NAT64、6to4、ULA、link-local、zone-id、十进制/八进制/十六进制 IPv4）
@@ -124,6 +125,7 @@ DSH 的 Windows 文件沙箱按**能力 SID** 授权：SID 由 `sha256(规范化
 - 每一跳重定向都重新校验，最多 5 跳，重定向响应体立即销毁
 - 响应体大小与图片像素上限；图片按 magic number 校验
 - 不读取任何代理环境变量（不存在 `HTTP_PROXY` 绕过）
+- 四种模式的授权视频下载复用上述 DNS/IP/重定向校验，通过 `safeFetchFile()` 流式写盘；默认单文件 100 MiB、每条 3 个、最多 10 条待下载、目录 1 GiB，每次下载 120 秒。聊天和仿真会话只得到附件编号，专用 `analyze_video` 按编号访问登记附件并调用 Seed；不开放任意路径或 URL。模式、白名单、有效期和文件边界会重新校验。详见 [VIDEO_RECEIVE.md](VIDEO_RECEIVE.md) 与 [VIDEO_ANALYSIS.md](VIDEO_ANALYSIS.md)。
 
 ---
 
@@ -168,6 +170,7 @@ node --check src/bridge.js  # 语法门禁（大文件改动后必跑）
 - [x] 语音只能取语音库内的文件（含 `allowAbsolutePath=true` 与相对穿越两种情形）
 - [x] 出站文本命中敏感信息时整条拦截；含已知会话令牌时直接抛错
 - [x] SSRF：scheme、URL 凭据、私有 IP、重定向、超时、大小限制（11 项）
+- [x] owner 视频：授权通道、真实落盘、地址刷新、离线补投跨模式隔离、容量限制、连接中断及超时清理（`npm run test:video`）
 - [x] 桥接 `200 + {ok:false}` 会被 MCP 当作失败上报（不产生静默假成功）
 - [x] 旧只读工具在非 `closed-agent` 模式下 fail-closed
 - [x] `state/` ACL 助手：非阻断、防递归、`start.bat` 纯 ASCII+CRLF 且先于桥接调用（**结构级断言**）

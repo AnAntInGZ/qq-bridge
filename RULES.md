@@ -25,6 +25,8 @@
 
 ## 权限分层
 
+视频自动接收支持全部模式，且 DSH 地址必须为回环地址。`closed-agent` 仍只处理 owner 私聊；其他模式只处理通过白名单的私聊和群聊。桥接保存原视频到 `state/incoming-videos/`，聊天和仿真会话只得到附件编号；仅 closed-agent owner 可得到路径。独立 `analyze_video` 工具按编号调用 Seed，不接受任意文件路径或 URL。附件绑定接收模式与权限并有一天有效期；排队、下载、分析时重查权限。下载复用公网 URL 校验，并限制大小、时限、数量和目录总量。配置与清理方法见 [视频接收说明](docs/guides/VIDEO_RECEIVE.md)。
+
 | 主体 | 通道 | 权限 |
 | --- | --- | --- |
 | **管理员（ownerQQ，控制台或 DSH 设置页可配置）** | QQ 群/私聊 | 正常聊天 + **管理命令由桥接硬执行**（不经过模型）：`/role <角色名>` 切人格、`/role off` 清除、`/silent` 静默、`/active` 恢复、`/reset`、`/status`；消息自动带【管理员】标记 |
@@ -35,7 +37,7 @@
 ## QQ 会话 agent 的硬边界
 
 1. **无本地工具**：qq-chat / qq-chat-v2 预设不挂载 bash/pwsh、文件读写、子代理、工作流——群友无论如何诱导，agent 物理上无法操作本机。
-2. **QQ 动作安全子集**：只允许 `mcp__snowluma__*`、`mcp__snowluma-host__*`、`mcp__web-search-safe__*` 三个命名空间下的工具，以及 `ask_user_question` / `todo_write`；其他工具（含 `dev_*` 开发/管理工具）在执行期会被 `qq-tool-restrict.mjs` 拒绝。QQ 动作无禁言、踢人、文件上传下载等管理操作。
+2. **QQ 动作安全子集**：允许 `mcp__snowluma__*`、`mcp__snowluma-host__*`、`mcp__web-search-safe__*`，以及专用 `mcp__video-analysis__analyze_video` 和 `ask_user_question` / `todo_write`；其他工具（含 `dev_*` 开发/管理工具）在执行期被拒绝。视频分析只访问桥接登记的附件，不提供通用文件上传下载能力。
 3. **只读联网搜索**：`qq-chat` / `qq-chat-v2` 预设已关闭 DSH 内置 `tool-web` 的 `search` / `fetch`，联网统一走 `src/mcp-web-search-safe.js` 提供的 `mcp__web-search-safe__web_search/web_fetch`。不暴露本地文件、命令执行、写操作。
    - ✅ `mcp__web-search-safe__web_fetch` 已做 SSRF 加固：仅 http/https、禁止 localhost/私有 IP/链路本地/CGNAT/带凭据 URL、DNS 解析结果全量校验、每跳重定向重新校验、响应体限量读取。
 4. **发送强制白名单**：所有发送类工具（`qq_send_group_message` / `qq_send_private_message` / `qq_send_message` / `qq_send_burst` / `qq_reply` / `qq_send_poke` / `qq_send_sticker` / `qq_send_voice` 等）的目标必须命中 `config.json` 的 `allow.groups` / `allow.private`，否则拒绝执行。

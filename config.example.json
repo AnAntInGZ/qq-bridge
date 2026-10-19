@@ -23,6 +23,22 @@
   },
   "ownerQQ": null,
   "sessionCwd": "",
+  "video": {
+    "enabled": true,
+    "maxBytes": 104857600,
+    "maxFilesPerMessage": 3,
+    "maxStoredBytes": 1073741824,
+    "timeoutMs": 120000
+  },
+  "videoAnalysis": {
+    "enabled": false,
+    "model": "doubao-seed-2-1-lite-260915",
+    "apiKeyEnv": "ARK_API_KEY",
+    "apiKeyFile": "state/secrets/ark-api-key",
+    "fps": 1,
+    "maxBytes": 104857600,
+    "timeoutMs": 300000
+  },
   "agentPreset": "qq-chat",
   "workspaceTitle": "QQ 聊天",
   "allow": {

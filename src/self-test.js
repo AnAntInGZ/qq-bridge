@@ -104,6 +104,10 @@ async function main() {
 
   const ended = await done;
   console.log('✅ 回合结束 reason =', ended.reason.kind);
+  if (ended.reason.kind !== 'completed') {
+    throw new Error(ended.reason.error?.message || `agent 回合未完成：${ended.reason.kind}`);
+  }
+  if (!ended.text.trim()) throw new Error('agent 回合结束，但没有返回文本');
   console.log('🤖 agent 回复:');
   console.log(ended.text || '（无文本）');
   await cleanupSelfTestSession();
