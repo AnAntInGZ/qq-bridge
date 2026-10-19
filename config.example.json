@@ -40,6 +40,10 @@
     "timeoutMs": 300000
   },
   "agentPreset": "qq-chat",
+  "character": {
+    "enabled": false,
+    "recentLimit": 3
+  },
   "workspaceTitle": "QQ 聊天",
   "allow": {
     "private": [],

@@ -25,6 +25,8 @@ import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
 import { createVideoReceiver, normalizeVideoConfig } from './receive-video.js';
 import { normalizeVideoAnalysisConfig } from './analyze-video.js';
 import { registerVideoAttachment } from './video-attachments.js';
+import { normalizeCharacterConfig } from './character/policy.mjs';
+import { createCharacterRuntime } from './character/runtime.mjs';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
 import { hardenDir, manualDirCommand } from './state-acl.mjs';
@@ -640,6 +642,7 @@ function loadConfig() {
     sessionCwd: file.sessionCwd ?? '',
     video: normalizeVideoConfig(file.video),
     videoAnalysis: normalizeVideoAnalysisConfig(file.videoAnalysis),
+    character: normalizeCharacterConfig(file.character),
     agentPreset: file.agentPreset ?? 'qq-chat',
     workspaceTitle: file.workspaceTitle ?? 'QQ 聊天',
     ownerQQ: normalizeOwnerQQ(file.ownerQQ),
@@ -1279,6 +1282,7 @@ const REJECT_WORDS = new Set(['拒绝', '不同意', '不允许', '驳回', 'no'
 // state/ 的 ACL 是否已收紧（hardenStateDirAcl 的结果；控制台「访问与安全」页会显示，
 // 未收紧时给出可复制的提权命令）。null = 还没跑/平台不适用。
 let stateDirHardened = null;
+let closeCharacterRuntime = () => {};
 
 // ── 主流程 ──────────────────────────────────────────────────────────────────
 async function main() {
@@ -1287,6 +1291,38 @@ async function main() {
   hardenStateDirAcl();
   acquireLock();
   loadState();
+
+  let character = null;
+  let characterError = null;
+  try {
+    character = await createCharacterRuntime({ root: ROOT, config: cfg.character });
+  } catch {
+    characterError = '角色基础存储不可用，已停用该模块；请在本机检查数据库和运行环境';
+    log(characterError);
+  }
+  closeCharacterRuntime = () => {
+    try { character?.close(); } catch { log('角色基础存储关闭失败，重启后须核对未完成操作'); }
+  };
+
+  function characterSnapshot() {
+    return character ? { available: true, ...character.status() }
+      : { available: false, enabled: cfg.character.enabled, phase: 'foundation', error: characterError };
+  }
+
+  function withCharacterContext(key, promptText) {
+    if (!character) return promptText;
+    if (!isSessionAllowedInCurrentMode(key)) throw new Error('当前会话无权读取角色近况');
+    try {
+      const context = character.promptFor(key);
+      return context ? `${promptText}\n\n${context}` : promptText;
+    } catch {
+      closeCharacterRuntime();
+      character = null;
+      characterError = '角色近况读取失败，已停用该模块；原有 QQ 交流继续';
+      log(characterError);
+      return promptText;
+    }
+  }
 
   // ── 群聊黑话/网络用语学习（slang） ──────────────────────────────────────
   let slangEntries = [];
@@ -3241,6 +3277,25 @@ async function main() {
             snowluma: snowlumaHealthSnapshot(),
             activity: readActivityTail(100)
           });
+          return;
+        }
+        // 角色管理保持在默认拒绝的管理面，不给 QQ agent 增加执行工具。
+        if (req.method === 'GET' && url.pathname === '/api/character/status') {
+          sendJson(characterSnapshot());
+          return;
+        }
+        if (req.method === 'POST' && url.pathname === '/api/character/pause') {
+          const body = await readBody();
+          if (!body || typeof body !== 'object' || Array.isArray(body)
+            || Object.keys(body).some(key => key !== 'paused') || typeof body.paused !== 'boolean') {
+            sendJson({ ok: false, error: '只接受布尔值 paused' }, 400);
+            return;
+          }
+          if (!character) {
+            sendJson({ ok: false, error: '角色基础存储未启用或不可用' }, 409);
+            return;
+          }
+          sendJson({ ok: true, character: character.setPaused(body.paused) });
           return;
         }
         if (req.method === 'GET' && url.pathname === '/api/presets') {
@@ -8452,10 +8507,11 @@ async function main() {
         promptText += `\n\n【本次消息快照】\n${JSON.stringify(wakeSnapshot)}\n以上消息已提供，无需重复查询；partial=true 时用 qq_get_unread_messages(afterSeq=readThroughSeq) 继续读取。先处理当前消息；回复前如需确认后续补充，用 qq_wait_for_messages(purpose="reply") 补足短静默，已安静够久会立即返回，不要先长等。收尾只确认你已处理的 readThroughSeq（本地 seq，非 QQ messageId），传给 qq_mark_read 或 qq_set_wake_config 的 throughSeq；新到消息留待处理。`;
       }
     }
-    let content = [{ type: 'text', text: withSlangContext(promptText) }];
+    const projectedPrompt = withCharacterContext(key, promptText);
+    let content = [{ type: 'text', text: withSlangContext(projectedPrompt) }];
     if (Array.isArray(opts.media) && opts.media.length > 0) {
       const imageParts = await resolveMediaList(opts.media);
-      content = [{ type: 'text', text: withSlangContext(promptText) }, ...imageParts];
+      content = [{ type: 'text', text: withSlangContext(projectedPrompt) }, ...imageParts];
     }
     // 媒体解析成功后再标记退场，避免解析异常时残留退场标记。
     if (videoBlocked()) return { ok: true, skipped: true };
@@ -10195,10 +10251,11 @@ async function main() {
       }
       throw error;
     }
-    let content = [{ type: 'text', text: withSlangContext(promptText) }];
+    const projectedPrompt = withCharacterContext(key, promptText);
+    let content = [{ type: 'text', text: withSlangContext(projectedPrompt) }];
     if (Array.isArray(mediaList) && mediaList.length > 0) {
       const imageParts = await resolveMediaList(mediaList);
-      content = [{ type: 'text', text: withSlangContext(promptText) }, ...imageParts];
+      content = [{ type: 'text', text: withSlangContext(projectedPrompt) }, ...imageParts];
     }
     if (ownerVideo && (currentMode !== 'closed-agent' || key !== `private:${cfg.ownerQQ}`)) return;
     if (!isCurrentSession(key, sessionId)) throw new Error('投递前会话已重置或权限已变化');
@@ -11044,11 +11101,13 @@ async function main() {
 process.on('SIGINT', () => {
   log('退出中…');
   saveState();
+  closeCharacterRuntime();
   releaseLock();
   process.exit(0);
 });
 process.on('SIGTERM', () => {
   saveState();
+  closeCharacterRuntime();
   releaseLock();
   process.exit(0);
 });
@@ -11071,7 +11130,7 @@ process.on('uncaughtException', (error) => {
   releaseLock();
   process.exit(1);
 });
-process.on('exit', () => releaseLock());
+process.on('exit', () => { closeCharacterRuntime(); releaseLock(); });
 
 main().catch((error) => {
   console.error('[bridge] 启动失败:', error);

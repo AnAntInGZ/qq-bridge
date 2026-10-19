@@ -115,6 +115,12 @@ DSH 的 Windows 文件沙箱按**能力 SID** 授权：SID 由 `sha256(规范化
 > 这两处不含凭据，恢复继承不涉及泄密风险 —— 是否恢复由使用者决定（`npm run diagnose:acl`
 > 会打印命令）。`state/` 不在此列。
 
+### 角色基础模块
+
+`character.enabled` 默认 false；启用后只提供基础记录和可见近况，没有自动决策、B 站或设备执行器。SQLite 数据与日志限制在受保护的 state 子目录，拒绝数据库和日志的符号链接及硬链接，不给 DSH 开放数据库文件。
+
+`/api/character/status` 和 `/api/character/pause` 沿用控制台鉴权与默认拒绝 agent 的规则。QQ 仅得到本会话可见经历，不获得管理状态、其他会话事实或执行代次。暂停、关闭和重启将已领取操作转为待核对；旧代次不能直接确认恢复后的结果。当前没有删除、更正或恢复管理 API。详见 [角色运行时](CHARACTER_RUNTIME.md)。
+
 ### 7. 网络
 
 `src/safe-fetch.js`（agent 的只读联网，以及桥接内部的 owner 视频下载）：

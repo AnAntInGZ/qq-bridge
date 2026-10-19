@@ -23,6 +23,8 @@ import * as modelPrices from '../src/model-prices.js';
 import * as tokenLedger from '../src/token-ledger.js';
 import * as voiceLib from '../src/send-voice-lib.js';
 import * as stateAcl from '../src/state-acl.mjs';
+import * as characterPolicy from '../src/character/policy.mjs';
+import { createCharacterRuntime } from '../src/character/runtime.mjs';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -108,6 +110,7 @@ export async function bridgeHarness({ config = {}, savedState, globals = {} } = 
   source = source.replace('  bot.onPrivateMessage(async (event) => {', `
   return {
     ensureSession, ensureSlangLearnerSession, resolvePresetName, deliverPrompt, drainPromptQueue,
+    character, characterSnapshot, closeCharacterRuntime,
     sendToQQ, sendStickerV2, handleIncoming, startConsoleServer, cfg, state, api, bot, queued, promptQueues,
     getSocialV2State, appendSocialV2Message, recordSentMessagesV2,
     buildWakePromptV2, buildWakeSnapshotV2, sendWakePromptV2, socialV2,
@@ -136,7 +139,7 @@ export async function bridgeHarness({ config = {}, savedState, globals = {} } = 
     SnowLumaWebSocketClient: FakeBot, text: (s) => s,
     discoverDshLaunchToken: () => '', unwrap, createTurnCollector,
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...receiveVideo, ...analyzeVideo, ...videoAttachments, ...roleCard, ...forward, ...slang, ...sticker,
-    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl,
+    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...characterPolicy, createCharacterRuntime,
     // ACL 收紧会 spawn icacls 去改**真实**文件系统；测试不该做这件事（同理见下面的
     // cleanupTemp / processAudioVolume 桩）。桩成成功，让 hardenStateDirAcl 走正常分支。
     hardenDir: () => ({ ok: true, detail: 'stub' }),
@@ -168,6 +171,7 @@ export async function bridgeHarness({ config = {}, savedState, globals = {} } = 
   bridge.setPresets(['standard', 'qq-chat', 'qq-chat-v2']);
   bridge.setReady(true);
   return { ...bridge, calls, temp, async close() {
+    bridge.closeCharacterRuntime();
     for (const timer of timers) clearTimeout(timer);
     fs.rmSync(temp, { recursive: true, force: true });
   } };

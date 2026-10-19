@@ -6,7 +6,10 @@
 | --- | --- |
 | [FOLDER_MAP.md](FOLDER_MAP.md) | 目录职责、脚本分类、源文件与生成物位置 |
 | [guides/HARNESS.md](guides/HARNESS.md) | 开发入口、代码与测试导航、统一检查、隔离夹具、已知基线失败 |
-| [guides/AUTONOMOUS_CHARACTER.md](guides/AUTONOMOUS_CHARACTER.md) | DeepSeek 自主角色方案：yuiju 参考、模块、状态与活动、B 站、安卓模拟器游戏、P0—P5 验收 |
+| [guides/CHARACTER_RUNTIME.md](guides/CHARACTER_RUNTIME.md) | 已接入的角色基础存储、近况投影、管理 API、离线验证与未实现部分 |
+| [plans/2026-10-19-character-foundation.md](plans/2026-10-19-character-foundation.md) | 第一批基础开发计划、当前 Windows 基线与实际验收结果 |
+| [plans/2026-10-19-autonomous-character-review.md](plans/2026-10-19-autonomous-character-review.md) | 自主角色最终评审入口：产品体验、设计决定、实施成果与上线前参数 |
+| [guides/AUTONOMOUS_CHARACTER.md](guides/AUTONOMOUS_CHARACTER.md) | DeepSeek 自主角色详细设计：决策与调度契约、上下文隔离、媒体队列、游戏、P0—P5 验收 |
 | [guides/CONTEXT.md](guides/CONTEXT.md) | 自主角色术语：角色、会话、意图、活动、经历、记忆、心情和信息范围 |
 | [plans/2026-10-19-autonomous-character.md](plans/2026-10-19-autonomous-character.md) | 设计任务交接、已确认需求、待定事项与下一次对话入口 |
 | [guides/VIDEO_RECEIVE.md](guides/VIDEO_RECEIVE.md) | 四种模式的 QQ 视频接收、附件权限、下载限制与验收 |

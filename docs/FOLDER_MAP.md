@@ -14,6 +14,7 @@
 | `src/mcp-*.js` | 四个 stdio MCP server：QQ 安全动作、只读宿主状态、受限联网、Seed 视频分析 |
 | `src/receive-video.js` / `src/video-attachments.js` / `src/analyze-video.js` | 视频下载、附件登记授权与独立 Seed 分析；主对话模型使用分析结果回复 |
 | `src/core/` | 逐会话策略纯模块与独立测试；当前尚未接入主程序 |
+| `src/character/` | 角色基础存储、范围策略与单元回归；近况投影已接入 bridge，外部执行器未接入 |
 | `src/` 其他模块 | 媒体、语音、表情、黑话、人格、提示词、网络防护、token 与 ACL；按职责复用 |
 | `dsh/agent-presets/` | 两个预设的权威源：元信息、persona 和插件行；工具守卫文件只是 re-export |
 | `plugins/qq-agent-presets/qq-tool-restrict.mjs` | 唯一工具守卫实现 |
@@ -33,7 +34,8 @@
 
 | 入口或类型 | 用途 |
 | --- | --- |
-| `check.mjs` | `npm run check`：语法、预设一致性、独立路由测试、审计回归、隐私扫描；保留失败退出码 |
+| `check.mjs` | `npm run check`：语法、预设一致性、独立路由测试、角色基础状态、审计回归、隐私扫描；保留失败退出码 |
+| `demo-character.mjs` | 临时目录中的假活动演示，不调用账号、模型、网站或设备 |
 | `test-audit.mjs` | 既有审计回归的清单与执行器，新审计脚本需登记；当前环境缺口见开发指南 |
 | `audit-bridge-harness.mjs` | VM 桥接夹具：临时目录、假 DSH/OneBot、调用记录与清理 |
 | `test-*.mjs` | 测试或手工验证；部分依赖活 DSH、QQ 或仓库外工具，先看脚本 |

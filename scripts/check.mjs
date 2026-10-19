@@ -39,6 +39,7 @@ for (const file of sources) run(`语法 ${file}`, ['--check', file], { quiet: tr
 const checks = [
   ['预设产物一致性', ['scripts/build-agent-preset-patches.mjs', '--check']],
   ['会话路由测试', ['--test', 'src/core/session-router.test.mjs']],
+  ['角色基础状态', ['--test', 'src/character/runtime.test.mjs']],
   ['审计回归', ['scripts/test-audit.mjs']],
   ['隐私扫描', ['scripts/privacy-scan.mjs']],
 ];

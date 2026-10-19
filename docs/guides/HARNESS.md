@@ -27,6 +27,7 @@ Node.js 要求 >= 22.13.0。保留 lockfile；`npm ci` 会运行 `patch-snowluma
 | 语法 | `scripts/check.mjs` 中的 `node --check` | 递归检查 `src/`、`scripts/`、`plugins/`、`dsh/` 中的 JS/MJS，不执行被检查文件 |
 | 预设一致性 | `scripts/build-agent-preset-patches.mjs --check` | 比较预设源与已提交的 bundle patch，不写文件 |
 | 会话路由 | `node --test src/core/session-router.test.mjs` | 独立模块的模式、preset、owner 边界与迁移；不代表主程序已接入 |
+| 角色基础状态 | `node --test src/character/runtime.test.mjs` | SQLite、去重、决策提交、活动、暂停、范围与恢复；不连接真实模型或设备 |
 | 审计回归 | `scripts/test-audit.mjs` | 真实业务代码配合 VM、假网关、临时文件和回环 HTTP fixture；仍有下文记录的外部依赖缺口 |
 | 隐私扫描 | `scripts/privacy-scan.mjs` | 已跟踪和未忽略的未跟踪文件；结果受放行规则和匹配限额约束 |
 
@@ -64,6 +65,7 @@ QQ 消息 → SnowLuma OneBot WS → bridge.js / handleIncoming
 | 语音与连接发现 | `src/voice-core.js`、`src/send-voice-lib.js`、`src/snowluma-conn.js` | 审计中的 `test-voice*.mjs`、`test-snowluma-conn.mjs`；独立工具缺失时核对跳过项 |
 | 控制台界面 | `public/console.html`、`scripts/console-ui-fixture.mjs` | `npm run preview:console`、`npm run test:console-ui`、`test-console-static.mjs`；见 [UI 测试指南](CONSOLE-UI-TESTING.md) |
 | 逐会话策略模块 | `src/core/session-router.mjs` | `npm run test:router`；主程序尚未导入，接入需另验真实消息与退役链路 |
+| 角色基础存储与近况 | `src/character/`、bridge 的 `withCharacterContext` 和 `/api/character/*` | `npm run test:character`、`npm run demo:character`；见 [运行时指南](CHARACTER_RUNTIME.md)，外部活动未接入 |
 
 表中 `test-*.mjs` 位于 `scripts/`，可用 `node scripts/<文件名>` 单独执行。完整审计清单以 `scripts/test-audit.mjs` 的 `tests` 数组为准，不能凭文件名判断是否已覆盖。
 
@@ -125,6 +127,19 @@ node scripts/test-agent-preset-patches.mjs
 额外验证：会话路由 **33/33 个用例通过**，预设源与产物一致。隐私扫描返回 0，但原有扫描器对部分规则报“匹配过多/过慢、结果可能不完整”，不能将退出码 0 解读为已证明没有秘密。
 
 修复后更新这一节，保留复现条件与实际结果。不要把它做成自动忽略失败的名单，也不要改变生产权限来迁就测试。
+
+## 本轮 Windows 基线补充
+
+2026-10-19，在 `80e2f09` 加设计文档改动、Windows、Node 26.6.0、未安装 DSH 的工作区运行 `npm ci` 和统一检查：修改前 112 个语法检查通过，路由 33/33，审计 29/33。预设一致性失败；审计实际失败如下，与上面的 macOS 历史记录分别保留：
+
+- `test-video-analysis.mjs`：两处创建文件符号链接遭遇 Windows EPERM。
+- `test-audit-setup.mjs`：Windows npm `.cmd` shim fixture 未被调用，子进程返回 ENOENT。
+- `test-voice-system.mjs`：缺少被忽略的 `docs/guides/VOICE.md`。
+- `test-preset-local-tools.mjs`：没有真实 DSH 安装供工具名对账；另有原有 qsh-closed 覆盖未建立的提示。
+
+加入角色基础实现后，统一检查 117 个语法检查通过，角色单元 18/18、审计 30/34，仍是上述 4 个脚本和预设一致性失败，没有新增失败。角色单元与桥接回归在最低 Node 22.13.0 上合计 26/26，离线演示通过；这些结果不代表真实模型或设备接入。SQLite 实验性告警保留。
+
+安装时 npm audit 报告 2 项已有依赖漏洞（1 high、1 critical，涉及 MCP SDK 和 proxy-addr）；本轮未自动升级依赖或运行 audit fix。隐私扫描结果仍须结合匹配限额告警解读。
 
 ## 持续维护
 
