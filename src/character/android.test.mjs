@@ -17,7 +17,9 @@ async function fixture(fn,overrides={},extras={}) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'qq-android-'));
   const config=androidConfig(overrides,extras.character);let now=Date.UTC(2026,9,21,10);
   let runtime=await createCharacterRuntime({root,config,now:()=>now});runtime.setPaused(false);
-  const time={value:0}, device=fakeDevice(config.android,time,extras.titles?{titles:extras.titles}:{});
+  const time={value:0}, deviceOptions=extras.titles?{titles:extras.titles}:{};
+  if (extras.misreport) deviceOptions.misreport=extras.misreport;
+  const device=fakeDevice(config.android,time,deviceOptions);
   const options=()=>({runtime,config:config.android,isAllowed:()=>true,device,clock:()=>time.value,
     sleep:async(ms,signal)=>{signal.throwIfAborted();time.value+=ms;},
     ...(extras.clipAnalyzer?{clipAnalyzer:extras.clipAnalyzer}:{})});
@@ -248,6 +250,35 @@ test('B 站预算见底时正常收尾，不把已确认的观看判成失败',a
   },{dailyActions:60,maxActions:20,activitySeconds:10,
     bilibili:{enabled:true,version:'fixture-1',watchSeconds:2,deepWatchSeconds:2,maxVideos:3,scrolls:1,selectors}},
   {titles:['甲 视频','乙 视频','丙 视频']});
+});
+test('B 站点开发现不是那一条时退出来换一条，不因此结束整场活动',async()=>{
+  const selectors={feedReady:'tv.danmaku.bili:id/feedReady',feedTitle:'tv.danmaku.bili:id/feedTitle',feedCard:'',playerReady:'tv.danmaku.bili:id/playerReady'};
+  await fixture(async h=>{
+    await h.service.start('bilibili');await h.service.settled();
+    assert.equal(h.service.status().fault,null);
+    // 第一条点开是广告/推荐漂移：退出列表再选，后两条照常看完，而不是整场收尾。
+    assert.equal(h.device.calls.gesture.filter(item=>item.type==='tap').length,3);
+    const fact=h.runtime.experiences('private:123')[0].fact;
+    assert.match(fact,/在安卓 B 站连续看了 2 条/);
+    assert.doesNotMatch(fact,/《甲 视频》停留/);
+    assert.match(fact,/另有 1 条点开后不是列表里的那一条/);
+    assert.doesNotMatch(fact,/活动提前结束/);
+  },{dailySeconds:600,dailyActions:60,maxActions:20,activitySeconds:120,
+    bilibili:{enabled:true,version:'fixture-1',watchSeconds:2,deepWatchSeconds:2,maxVideos:3,scrolls:1,selectors}},
+  {titles:['甲 视频','乙 视频','丙 视频'],misreport:[0]});
+});
+test('B 站连续开错太多次时收尾，不无限重试也不丢掉已确认的观看',async()=>{
+  const selectors={feedReady:'tv.danmaku.bili:id/feedReady',feedTitle:'tv.danmaku.bili:id/feedTitle',feedCard:'',playerReady:'tv.danmaku.bili:id/playerReady'};
+  await fixture(async h=>{
+    await h.service.start('bilibili');await h.service.settled();
+    assert.equal(h.runtime.status().active,null);
+    // 全部错位时按跳过上限停下：不能编出一条"看完了"的经历来凑数。
+    const fact=h.runtime.experiences('private:123')[0].fact;
+    assert.match(fact,/未作为完成事实提交/);
+    assert.doesNotMatch(fact,/停留 \d+ 秒/);
+  },{dailySeconds:600,dailyActions:60,maxActions:20,activitySeconds:120,
+    bilibili:{enabled:true,version:'fixture-1',watchSeconds:2,deepWatchSeconds:2,maxVideos:3,scrolls:1,selectors}},
+  {titles:['甲 视频','乙 视频','丙 视频'],misreport:[0,1,2]});
 });
 test('Seed 录屏回答按三行解析，缺主题或含路径特征时整条作废',()=>{
   assert.deepEqual(parseClipAnswer('类型：游戏\n主题：雪山滑雪跳跃\n细节：角色在雪坡上翻滚'),

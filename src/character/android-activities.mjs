@@ -13,6 +13,9 @@ import { clipSummary } from './android-watch.mjs';
 const CARD_KINDS = new Set(['视频']);
 // 播放中相隔数秒的画面变化率实测约 18%，暂停时为 0；留 0.2% 容忍静态镜头。
 const MIN_FRAME_CHANGE = 0.002;
+// 点开才发现不是那一条时可以退出来换一条，但连续几条都不对说明页面结构变了，
+// 再点只是白花动作额度，所以有上限。
+const MAX_MISSES = 3;
 
 export function playerState(frame, selectors) {
   const nodes=frame.nodes.filter(node=>node.id===selectors.playerReady);
@@ -120,7 +123,7 @@ export function createAndroidActivities({ runtime, config, isAllowed, device = c
         fact='安卓 2048 已确认 '+moves+' 次合法移动，观察到最大方块 '+max+'；'+(max>=2048?'实际达到 2048':result.terminal==='no-legal-move'?'实际棋盘已无合法移动':'按本次活动上限停止，未声称通关');
       } else {
         const settings=config.bilibili, selectors=settings.selectors;
-        let scrolls=0,waits=0;const seen=[],seenTitles=[];
+        let scrolls=0,waits=0,misses=0,skipped=0;const seen=[],seenTitles=[];
         const interests=runtime.project(operation.scope).psychology.interests.map(item=>item.topic.toLowerCase());
         // 命中兴趣越多的标题停得越久：真人也是感兴趣的看进去、没兴趣的瞄一眼就走。
         const planStay=topic=>{
@@ -144,7 +147,8 @@ export function createAndroidActivities({ runtime, config, isAllowed, device = c
           const tail=analyzed
             ? '；其中 '+analyzed+' 条用 Seed 看过画面，其余只有播放态证据，都不代表完整看完'
             : '；媒体会话确认持续播放、画面持续变化，未分析画面或音轨，不代表完整看完';
-          return '在安卓 B 站连续看了 '+seen.length+' 条、共 '+total+' 秒：'+detail+tail;
+          return '在安卓 B 站连续看了 '+seen.length+' 条、共 '+total+' 秒：'+detail+tail
+            +(skipped?'；另有 '+skipped+' 条点开后不是列表里的那一条，已退出来换一条':'');
         };
         for (;;) {
           let items=[];
@@ -175,53 +179,76 @@ export function createAndroidActivities({ runtime, config, isAllowed, device = c
           // 剩余预算不够一条完整观察时不再开新的，直接收尾，不把这次判成失败。
           const stay=Math.min(planStay(target.title),Math.floor((remainingMs()-RESERVE_MS)/1000));
           if (stay<settings.watchSeconds) break;
-          // 复核只认"这一条还在列表里且标题一致"：列表会动态加载，节点索引和坐标
-          // 都可能变，拿整个节点做全等比较会把正常刷新误判成画面不匹配。
-          const opened=await gesture(frame,{type:'tap',node:target.node,
-            resolve:fresh=>feedItems(fresh,selectors).find(item=>sameTitle(item.title,target.title))?.node},
-            fresh=>feedItems(fresh,selectors).some(node=>sameTitle(node.title,target.title)),'open');
-          await sleep(1000,signal);frame=await observe(true);
-          playerState(frame,selectors);
-          // 真机播放器是自绘的，进度不可读；改用媒体会话的播放态与标题，加画面帧差和墙钟互证。
-          const first=await device.playback('bilibili',options);
-          if (first.state!=='PLAYING') throw new Error('B 站未确认在播放');
-          if (!sameTitle(first.title,target.title)) throw new Error('B 站打开内容与推荐候选不匹配');
-          opened();const watchStarted=clock(),startFrame=frame;
-          // 录屏本身就是"正在看"：录制与分析的时间计入这次停留，剩下的时间继续安静看完。
-          // 内容理解是补充层，拿不到就退回只有播放证据，不因此判定这次观看失败。
-          let clip=null;
-          const clipSeconds=clipAnalyzer&&settings.analyze?Math.min(settings.clipSeconds,stay):0;
-          if (clipSeconds) {
-            try {
-              const bytes=await device.record('bilibili',{seconds:clipSeconds,guard,signal});
-              clip=await clipAnalyzer(bytes,{guard});
-              if (clip) evidence.push('android-clip:'+clip.topic.slice(0,24));
-            } catch (error) {
-              // 预算到点或准入失效必须照原样抛出，只有"内容没拿到"才降级。
-              if (signal.aborted || /准入已失效/.test(error?.message ?? '')) throw error;
-              // 降级要留原因，否则事后只能看到"没分析"而不知道卡在哪。
-              evidence.push('android-clip-error:'+String(error?.message ?? 'unknown').slice(0,120));
-              clip=null;
+          // 点开之后到确认看完之间都可能"开错门"：广告跳转、直播、列表漂移。
+          // 真人遇到这种情况是退出来换一条，所以这里只把硬条件当终止，其余都当跳过。
+          let opened=null;
+          try {
+            // 复核只认"这一条还在列表里且标题一致"：列表会动态加载，节点索引和坐标
+            // 都可能变，拿整个节点做全等比较会把正常刷新误判成画面不匹配。
+            opened=await gesture(frame,{type:'tap',node:target.node,
+              resolve:fresh=>feedItems(fresh,selectors).find(item=>sameTitle(item.title,target.title))?.node},
+              fresh=>feedItems(fresh,selectors).some(node=>sameTitle(node.title,target.title)),'open');
+            await sleep(1000,signal);frame=await observe(true);
+            playerState(frame,selectors);
+            // 真机播放器是自绘的，进度不可读；改用媒体会话的播放态与标题，加画面帧差和墙钟互证。
+            const first=await device.playback('bilibili',options);
+            if (first.state!=='PLAYING') throw new Error('B 站未确认在播放');
+            if (!sameTitle(first.title,target.title)) throw new Error('B 站打开内容与推荐候选不匹配');
+            opened();const watchStarted=clock(),startFrame=frame;
+            // 录屏本身就是"正在看"：录制与分析的时间计入这次停留，剩下的时间继续安静看完。
+            // 内容理解是补充层，拿不到就退回只有播放证据，不因此判定这次观看失败。
+            let clip=null;
+            const clipSeconds=clipAnalyzer&&settings.analyze?Math.min(settings.clipSeconds,stay):0;
+            if (clipSeconds) {
+              try {
+                const bytes=await device.record('bilibili',{seconds:clipSeconds,guard,signal});
+                clip=await clipAnalyzer(bytes,{guard});
+                if (clip) evidence.push('android-clip:'+clip.topic.slice(0,24));
+              } catch (error) {
+                // 预算到点或准入失效必须照原样抛出，只有"内容没拿到"才降级。
+                if (signal.aborted || /准入已失效/.test(error?.message ?? '')) throw error;
+                // 降级要留原因，否则事后只能看到"没分析"而不知道卡在哪。
+                evidence.push('android-clip-error:'+String(error?.message ?? 'unknown').slice(0,120));
+                clip=null;
+              }
+            }
+            // 观看途中只查致命条件：预算到点属于收尾，不是故障。
+            for (let second=Math.round((clock()-watchStarted)/1000);second<stay;second++) {await sleep(1000,signal);fatal();}
+            frame=await observe(true);
+            playerState(frame,selectors);
+            const last=await device.playback('bilibili',options);
+            if (last.state!=='PLAYING') throw new Error('B 站播放已中断');
+            if (!sameTitle(last.title,first.title)) throw new Error('B 站播放内容发生变化');
+            const elapsed=Math.round((clock()-watchStarted)/1000), change=frameChange(startFrame.image,frame.image);
+            if (change < MIN_FRAME_CHANGE) throw new Error('B 站画面未观察到推进');
+            seen.push({title:target.title,seconds:elapsed,clip});seenTitles.push(target.title);
+            result={kind:'bilibili',videos:seen.length,totalSeconds:seen.reduce((sum,item)=>sum+item.seconds,0),items:seen,
+              frameChange:Math.round(change*1000)/1000,analyzed:seen.filter(item=>item.clip).length};
+            progress={kind:'bilibili',confirmedVideos:seen.length,observedSeconds:result.totalSeconds};
+            fact=narrate();misses=0;
+            if (seen.length>=settings.maxVideos || actions>=config.maxActions) break;
+            const returned=await gesture(frame,{type:'back'},fresh=>{playerState(fresh,selectors);return true;},'back');
+            // 返回后列表会重载，不在这里断言候选；下一轮会自己等待并重试。
+            await sleep(1200,signal);frame=await observe(false);returned();
+          } catch (error) {
+            const message=String(error?.message ?? 'unknown');
+            // 点出去的这一步已经落到设备上了，必须先结清：留着未决记录会让后面退出列表
+            // 的 back 注册不进去，反倒把"换一条"变成"整场结束"。
+            try {opened?.();} catch {}
+            // 预算到点、准入失效、动作额度用完：这些不是"这一条没看成"，是整场结束。
+            if (signal.aborted || budgetExpired || /准入已失效|动作额度/.test(message)) throw error;
+            misses++;skipped++;
+            evidence.push('android-skip:'+target.title.slice(0,24)+'@'+message.slice(0,40));
+            seenTitles.push(target.title);
+            // 连续开错说明页面已经不是我认得的那个结构了，再点只是白花额度。
+            if (misses>MAX_MISSES) throw error;
+            await sleep(800,signal);frame=await observe(false);
+            // 还在播放器里就先退出来，下一轮继续从列表里挑；退不回去会自己抛错收尾。
+            if (frame.nodes.some(node=>node.id===selectors.playerReady)) {
+              const back=await gesture(frame,{type:'back'},fresh=>{playerState(fresh,selectors);return true;},'back');
+              await sleep(1200,signal);frame=await observe(false);back();
             }
           }
-          // 观看途中只查致命条件：预算到点属于收尾，不是故障。
-          for (let second=Math.round((clock()-watchStarted)/1000);second<stay;second++) {await sleep(1000,signal);fatal();}
-          frame=await observe(true);
-          playerState(frame,selectors);
-          const last=await device.playback('bilibili',options);
-          if (last.state!=='PLAYING') throw new Error('B 站播放已中断');
-          if (!sameTitle(last.title,first.title)) throw new Error('B 站播放内容发生变化');
-          const elapsed=Math.round((clock()-watchStarted)/1000), change=frameChange(startFrame.image,frame.image);
-          if (change < MIN_FRAME_CHANGE) throw new Error('B 站画面未观察到推进');
-          seen.push({title:target.title,seconds:elapsed,clip});seenTitles.push(target.title);
-          result={kind:'bilibili',videos:seen.length,totalSeconds:seen.reduce((sum,item)=>sum+item.seconds,0),items:seen,
-            frameChange:Math.round(change*1000)/1000,analyzed:seen.filter(item=>item.clip).length};
-          progress={kind:'bilibili',confirmedVideos:seen.length,observedSeconds:result.totalSeconds};
-          fact=narrate();
-          if (seen.length>=settings.maxVideos || actions>=config.maxActions) break;
-          const returned=await gesture(frame,{type:'back'},fresh=>{playerState(fresh,selectors);return true;},'back');
-          // 返回后列表会重载，不在这里断言候选；下一轮会自己等待并重试。
-          await sleep(1200,signal);frame=await observe(false);returned();
         }
         if (!seen.length) throw new Error('B 站没有已确认的播放观察');
       }

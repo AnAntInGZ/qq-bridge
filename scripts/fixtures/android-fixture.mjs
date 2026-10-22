@@ -55,6 +55,8 @@ export function node(id,text='',clickable=false) {return {id,text,description:''
 export function fakeDevice(config,time={value:0},options={}) {
   // 推荐流条目按顺序铺开，连续浏览时才会真的换到下一条。
   const titles=options.titles ?? ['离线夹具视频'];
+  // 指定下标模拟"点开才发现不是那一条"：播放态回报的标题与列表候选不一致。
+  const misreport=new Set(options.misreport ?? []);
   const CARD_TOP=i=>200+i*280;
   let grid=[...INITIAL_BOARD], screen='feed', current=0;
   const calls={launch:[],gesture:[],stop:[],record:0};
@@ -62,7 +64,7 @@ export function fakeDevice(config,time={value:0},options={}) {
     calls,stopFails:false,invalidMove:false,playState:'PLAYING',frozen:false,
     get opened(){return titles[current];},
     async launch(kind,options){options.guard();await options.beforeSend();calls.launch.push(kind);},
-    async playback(){return {state:device.playState,code:device.playState==='PLAYING'?3:2,title:titles[current]};},
+    async playback(){return {state:device.playState,code:device.playState==='PLAYING'?3:2,title:misreport.has(current)?'广告位招租：完全无关的另一条内容':titles[current]};},
     // 录屏按真实时长推进墙钟：录制本身就是停留的一部分，夹具必须体现这一点。
     async record(kind,options={}) {
       options.guard?.();options.signal?.throwIfAborted();
