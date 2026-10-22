@@ -1,0 +1,17 @@
+[Unit]
+Description=ADB tunnel to the dedicated Android node
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+# 改为部署桥接的实际用户；该用户的 SSH config 定义 qq-android-node。
+User=qq-bridge
+ExecStart=/usr/bin/ssh -NT -o BatchMode=yes -o StrictHostKeyChecking=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -L 127.0.0.1:5555:127.0.0.1:5555 qq-android-node
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

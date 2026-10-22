@@ -375,6 +375,10 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
       if (method === 'GET') {
         switch (path) {
           case '/api/status': return json({ ok: true, dshReady: true, mode: state.mode, role: state.role, roleMode: state.roleMode, closedAgentPreset: state.closedAgentPreset, ownerQQ: state.whitelist.ownerQQ, allowGroups: state.whitelist.allow.groups, allowPrivate: state.whitelist.allow.private, activity: '[08:30:00] 演示桥接已连接\n[08:30:12] group:123456789 · 已处理一条消息\n[08:30:20] 二代社交助手正在运行\n以上均为离线模拟数据。' });
+          case '/api/character/android/status': return json({ok:true,enabled:false,inFlight:false,budget:{allowed:false},jobs:[]});
+          case '/api/character/status': return json({ available: false, enabled: false, phase: 'foundation' });
+          case '/api/character/experiences':
+          case '/api/character/memory': return json({ ok: true, memoryVersion: 0, data: [] });
           case '/api/presets': return json({ presets: [{ id: 'qq-chat-v2', trust: 'user' }, { id: 'qq-chat', trust: 'user' }] });
           case '/api/roles': return json({
             roles: state.roles.slice(),
@@ -490,6 +494,12 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
       }
       if (method === 'POST') {
         switch (path) {
+          case '/api/character/android/start':
+          case '/api/character/android/stop':
+          case '/api/character/android/reconcile':
+          case '/api/character/pause':
+          case '/api/character/experience/delete':
+          case '/api/character/experience/correct': return json({ ok: false, error: '离线控制台夹具未启用角色模块' }, 409);
           case '/api/mode': state.mode = body.mode; state.closedAgentPreset = body.closedAgentPreset; return json({ ok: true, dshSynced: true });
           case '/api/role': state.role = body.role; return json({ ok: true });
           case '/api/roles/create': state.roles.push(body.name); state.roleContents[body.name] = body.content ?? ''; return json({ ok: true, role: body.name, warnings: [] });

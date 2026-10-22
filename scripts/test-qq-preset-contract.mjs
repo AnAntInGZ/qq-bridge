@@ -14,8 +14,24 @@ const prefix = persona?.config?.prefix ?? '';
 test('reserved2 YAML resolves to the expected persona and template variables', () => {
   assert.equal(persona?.name, '@deepseek-ai/dsh-persona');
   assert.match(prefix, /\{\{model\}\}/);
-  assert.match(persona.config.suffix, /\{\{cwd\}\}/);
   assert.equal(Object.hasOwn(persona.config, 'text'), false);
+});
+
+test('restricted personas render with only model-provider prompt variables', () => {
+  // QQ 预设没有本地工具上下文，cwd 等变量不会注册；不能只检查 persona 配置 schema。
+  const variables = { provider: 'fixture-provider', model: 'fixture-model' };
+  for (const name of ['qq-chat', 'qq-chat-v2']) {
+    const rows = yaml.load(fs.readFileSync(
+      new URL(`../dsh/agent-presets/${name}/agent.cordis.yml`, import.meta.url), 'utf8',
+    ));
+    const config = rows.find(row => row.id === 'persona').config;
+    for (const field of ['prefix', 'suffix']) {
+      String(config[field] ?? '').replace(/\{\{([^{}]+)\}\}/g, (_, variable) => {
+        assert.ok(Object.hasOwn(variables, variable), `${name}.${field}: unknown prompt variable ${variable}`);
+        return variables[variable];
+      });
+    }
+  }
 });
 
 test('local/admin tool restrictions and existing compaction budgets stay intact', () => {

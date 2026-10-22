@@ -5,6 +5,9 @@ import { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const API = 'https://ark.cn-beijing.volces.com/api/v3';
+// 分析器只认两个受控目录：QQ 收来的附件，和安卓活动自己录的片段。
+// 活动片段单独存放，避免和附件清理、附件编号有效期混在一起。
+const SOURCES = Object.freeze({ attachment: 'state/incoming-videos', activity: 'state/activity-clips' });
 const DEFAULTS = Object.freeze({
   enabled: false,
   model: 'doubao-seed-2-1-lite-260915',
@@ -44,7 +47,9 @@ export function readArkKey(config, root, env = process.env) {
       if (!stat.isFile() || stat.nlink !== 1 || stat.size > 1024 || (process.platform !== 'win32' && (stat.mode & 0o077))) fail('密钥文件必须为私有文件，权限设为 600');
       key = fs.readFileSync(fd, 'utf8');
     } catch (error) {
-      if (error.code !== 'ENOENT') fail('无法安全读取方舟密钥文件，请检查文件类型和权限');
+      // 具体原因必须能区分：全部归一成一句话会让"权限不对"和"句柄耗尽"无法排查。
+      if (error instanceof AnalysisError) throw error;
+      if (error.code !== 'ENOENT') fail('无法安全读取方舟密钥文件（' + (error.code ?? '类型或权限不符') + '）');
     } finally {
       if (fd !== undefined) fs.closeSync(fd);
     }
@@ -66,7 +71,7 @@ function mimeType(header, extension) {
 
 export function createVideoAnalyzer({ root, fetchImpl = fetch, pollMs = 2000, isAllowed = () => true }) {
   let busy = false;
-  return async function analyze({ filePath, question, config, permission = isAllowed }) {
+  return async function analyze({ filePath, question, config, permission = isAllowed, source = 'attachment' }) {
     const options = normalizeVideoAnalysisConfig(config);
     if (!options.enabled) fail('Seed 视频分析尚未启用');
     if (typeof question !== 'string' || !question.trim() || question.length > 6000) fail('视频问题必须为 1 到 6000 字的文本');
@@ -75,9 +80,11 @@ export function createVideoAnalyzer({ root, fetchImpl = fetch, pollMs = 2000, is
     const allowed = () => { if (!authorization || permission() !== authorization) fail('视频附件分析权限已撤销'); };
     allowed();
     const key = readArkKey(options, root);
-    const directory = path.resolve(root, 'state/incoming-videos');
+    // 来源只认固定枚举，不接受调用方传任意目录。
+    if (!Object.hasOwn(SOURCES, source)) fail('视频分析来源无效');
+    const directory = path.resolve(root, SOURCES[source]);
     if (typeof filePath !== 'string' || path.dirname(path.resolve(filePath)) !== directory
-      || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\.(mp4|mov|m4v|webm|avi)$/.test(path.basename(filePath))) fail('只能分析桥接保存的视频附件');
+      || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\.(mp4|mov|m4v|webm|avi)$/.test(path.basename(filePath))) fail('只能分析已登记目录中的视频文件');
     busy = true;
     let handle;
     let uploadedId;

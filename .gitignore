@@ -66,3 +66,9 @@ docs/guides/VOICE.md
 # 语音库（用户个人音频素材，config.json 的 socialV2.voice.dir 指向此处）
 audio/
 
+
+# 独立安卓节点的应用数据与账号
+deploy/android/data/
+
+# 本机工作区记忆与项目数据，不进仓库
+.workbuddy/

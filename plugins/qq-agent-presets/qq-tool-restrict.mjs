@@ -1,6 +1,8 @@
+import Schema from '@deepseek-ai/schemastery';
+
 // QQ 桥接安全硬边界：只允许 QQ MCP 工具与少量无害模型侧工具。
 //
-// 本文件是 qq-agent-presets bundle 里的**唯一权威实现**，由 qq-chat / qq-chat-v2 两个
+// 本文件是 qq-agent-presets bundle 里的**唯一权威实现**，由 qq-chat / qq-chat-v2 / qq-life 三个
 // agent preset 的 qq-tool-restrict 行共同引用（dsh/agent-presets/<preset>/qq-tool-restrict.mjs
 // 只是个 re-export 壳，避免出现两份会漂移的实现）。
 //
@@ -23,6 +25,7 @@
 //    那既不满足"仿真会话不得拥有本地执行能力"的注册期要求，也会诱导模型去调它。
 //    所以本地工具必须同时出现在下面的 restrict 名单里。
 export const name = 'qq-tool-restrict'
+export const Config = Schema.object({ profile: Schema.union(['chat', 'life']).default('chat') })
 
 export const inject = ['tools']
 
@@ -174,7 +177,15 @@ const SAFE_EXACT = new Set([
   'todo_write',
 ])
 
-export function apply(ctx) {
+export function apply(ctx, config = {}) {
+  if (config.profile === 'life') {
+    // allow 空集同时遮蔽未来新增的继承工具；不支持严格限制时让预设挂载失败。
+    ctx.tools.presentAs('native');
+    ctx.tools.restrict({ allow: [] });
+    ctx.tools.guard(exec => exec?.name === 'character_propose' ? undefined : '生活决策只允许暂存提案');
+    return;
+  }
+  if (config.profile !== undefined && config.profile !== 'chat') throw new Error('未知工具守卫配置');
   // 1) 把已知危险全局工具从 schema 隐藏（restrict 只影响继承的全局层，
   //    不会误删 preset 自己注册的 scoped 工具）。
   // 逐个 restrict：当前 DSH 版本不存在的工具名会单独抛错并跳过，

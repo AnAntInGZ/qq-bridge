@@ -1,6 +1,6 @@
 # DeepSeek 自主角色最终方案评审
 
-日期：2026-10-19。本页保留评审的产品方向与方案取舍；owner 已要求开始开发，当前仅交付基础存储、活动登记和近况投影，见 [运行时指南](../guides/CHARACTER_RUNTIME.md) 和 [开发记录](2026-10-19-character-foundation.md)。完整目标见 [详细设计](../guides/AUTONOMOUS_CHARACTER.md)。
+日期：2026-10-19。本页保留评审的产品方向与方案取舍；owner 已要求开始开发，当前已交付基础存储、活动登记、近况投影、[离线调度与有限重试](2026-10-21-character-scheduler.md) 及 [受限生活决策与连续角色](2026-10-21-character-life.md)，见 [运行时指南](../guides/CHARACTER_RUNTIME.md) 和 [开发记录](2026-10-19-character-foundation.md)。完整目标见 [详细设计](../guides/AUTONOMOUS_CHARACTER.md)。
 
 ## 希望实现的体验
 

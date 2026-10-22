@@ -1,0 +1,24 @@
+services:
+  android:
+    image: ${REDROID_IMAGE:?请设置经过核对的 redroid/redroid:13.0.0-latest@sha256 固定摘要}
+    container_name: qq-android-redroid
+    privileged: true
+    restart: "no"
+    cpus: 2.0
+    mem_limit: 2g
+    pids_limit: 1024
+    shm_size: 512m
+    ports:
+      - "127.0.0.1:5555:5555"
+    volumes:
+      - "/dev/binder:/dev/binder"
+      - "/dev/hwbinder:/dev/hwbinder"
+      - "/dev/vndbinder:/dev/vndbinder"
+      - "./data:/data"
+    command:
+      - androidboot.use_memfd=1
+      - androidboot.redroid_gpu_mode=guest
+      - androidboot.redroid_width=720
+      - androidboot.redroid_height=1280
+      - androidboot.redroid_dpi=320
+      - androidboot.redroid_fps=15

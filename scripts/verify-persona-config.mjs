@@ -31,12 +31,12 @@ check('新配置 {prefix} 通过（个人前缀）', () => {
   if (v.prefix.length === 0) throw new Error('prefix 为空');
 });
 
-check('新配置 {prefix, suffix} 通过（含 {{cwd}} 模板）', () => {
+check('新配置 {prefix, suffix} 通过（不依赖本地工具上下文）', () => {
   const v = persona.Config({
     prefix: 'You are a coding agent powered by the {{model}} model.',
-    suffix: 'Your working directory is {{cwd}}.',
+    suffix: 'Use QQ tools only.',
   });
-  if (v.suffix !== 'Your working directory is {{cwd}}.') throw new Error('suffix 未保留');
+  if (v.suffix !== 'Use QQ tools only.') throw new Error('suffix 未保留');
   if (v.complete !== false) throw new Error('complete 默认值异常');
   if (v.includeRuntimeContext !== true) throw new Error('includeRuntimeContext 默认值异常');
 });
@@ -58,8 +58,8 @@ for (const preset of ['qq-chat', 'qq-chat-v2']) {
   check('保留了 {{model}} 变量', () => {
     if (!/\{\{model\}\}/.test(row.config.prefix)) throw new Error('prefix 缺少 {{model}}');
   });
-  check('保留了 {{cwd}} 变量', () => {
-    if (!/\{\{cwd\}\}/.test(row.config.suffix ?? '')) throw new Error('suffix 缺少 {{cwd}}');
+  check('不依赖未注册的 {{cwd}} 变量', () => {
+    if (/\{\{cwd\}\}/.test(JSON.stringify(row.config))) throw new Error('受限会话不注册 cwd');
   });
   check('不再包含已废弃的 text 字段', () => {
     if (Object.hasOwn(row.config, 'text')) throw new Error('仍有 text 字段');

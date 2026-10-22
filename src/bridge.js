@@ -23,10 +23,13 @@ import { looksLikeUnfinished } from './v2-wait.js';
 import { compactModelMessage } from './qq-model-view.js';
 import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
 import { createVideoReceiver, normalizeVideoConfig } from './receive-video.js';
-import { normalizeVideoAnalysisConfig } from './analyze-video.js';
+import { normalizeVideoAnalysisConfig, createVideoAnalyzer } from './analyze-video.js';
 import { registerVideoAttachment } from './video-attachments.js';
 import { normalizeCharacterConfig } from './character/policy.mjs';
 import { createCharacterRuntime } from './character/runtime.mjs';
+import { createCharacterCoordinator } from './character/coordinator.mjs';
+import { createClipAnalyzer } from './character/android-watch.mjs';
+import { stopSessionAndConfirm } from './character/dsh-life.mjs';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
 import { hardenDir, manualDirCommand } from './state-acl.mjs';
@@ -1283,6 +1286,7 @@ const REJECT_WORDS = new Set(['拒绝', '不同意', '不允许', '驳回', 'no'
 // 未收紧时给出可复制的提权命令）。null = 还没跑/平台不适用。
 let stateDirHardened = null;
 let closeCharacterRuntime = () => {};
+let closeCharacterRuntimeSync = () => {};
 
 // ── 主流程 ──────────────────────────────────────────────────────────────────
 async function main() {
@@ -1293,23 +1297,43 @@ async function main() {
   loadState();
 
   let character = null;
+  let characterLife = null;
+  let characterLifeTimer = null;
+  let characterPrivacyFence = false;
   let characterError = null;
   try {
     character = await createCharacterRuntime({ root: ROOT, config: cfg.character });
-  } catch {
-    characterError = '角色基础存储不可用，已停用该模块；请在本机检查数据库和运行环境';
+  } catch (error) {
+    characterPrivacyFence = error?.code === 'CHARACTER_PRIVACY_BLOCKED';
+    characterError = characterPrivacyFence ? '角色记忆恢复核对未完成，已阻止旧上下文读取与发送'
+      : '角色基础存储不可用，已停用该模块；请在本机检查数据库和运行环境';
     log(characterError);
   }
-  closeCharacterRuntime = () => {
-    try { character?.close(); } catch { log('角色基础存储关闭失败，重启后须核对未完成操作'); }
+  closeCharacterRuntimeSync = () => { try { character?.close(); } catch {} };
+  closeCharacterRuntime = async () => {
+    const current = character;
+    clearInterval(characterLifeTimer);
+    try { await characterLife?.close(); } catch { log('角色执行器退出未确认，重启后须核对设备'); }
+    try { current?.close(); } catch { log('角色基础存储关闭失败，重启后须核对未完成操作'); }
   };
 
   function characterSnapshot() {
-    return character ? { available: true, ...character.status() }
-      : { available: false, enabled: cfg.character.enabled, phase: 'foundation', error: characterError };
+    if (!character) return { available: false, enabled: cfg.character.enabled, phase: 'foundation', privacyBlocked: characterPrivacyFence, error: characterError };
+    const status = character.status();
+    const autonomy = characterLife?.status() ?? null;
+    return { available: true, ...status, phase: autonomy?.enabled ? 'life' : 'foundation', autonomy,
+      capabilities: { ...status.capabilities, autonomousDecision: autonomy?.enabled === true && autonomy.ready } };
   }
 
+  function characterContextCurrent(version) {
+    return !characterPrivacyFence && !character?.invalidations().length
+      && (!character || version === undefined || version === character.memoryVersion());
+  }
+  function assertCharacterContextVersion(version) {
+    if (!characterContextCurrent(version)) throw new Error('角色记忆上下文版本已失效');
+  }
   function withCharacterContext(key, promptText) {
+    if (characterPrivacyFence || character?.invalidations().length) throw new Error('角色记忆上下文正在更新');
     if (!character) return promptText;
     if (!isSessionAllowedInCurrentMode(key)) throw new Error('当前会话无权读取角色近况');
     try {
@@ -2326,6 +2350,7 @@ async function main() {
     priceTable,
     // 会话 → QQ 会话归属：学习会话单独记账，其余未知会话归入「未归属」。
     resolveKey: (sessionId) => reverse.get(sessionId)
+      ?? (characterLife?.ownsSession(sessionId) ? 'internal:角色生活' : undefined)
       ?? (learnerSessions.has(sessionId) || (slangLearnerSessionId && sessionId === slangLearnerSessionId)
         ? 'internal:黑话学习'
         : undefined)
@@ -2468,13 +2493,14 @@ async function main() {
   // reset 竞态导致 ensureSession 抛「会话创建期间已重置」时，把消息放回队列稍后重试。
   // 已在队列中的相同文本不重复入队。
   const enqueueForRetry = (key, promptText, opts = {}) => {
+    assertCharacterContextVersion(opts.characterContextVersion);
     const items = queued.get(key) ?? [];
     if (!items.some((it) => it.promptText === promptText)) {
       if (items.length >= QUEUE_MAX) {
         items.shift();
         log(`队列满（${QUEUE_MAX}），丢弃最旧消息 (${key})`);
       }
-      items.push({ promptText, farewell: !!opts.farewell, silent: !!opts.silent, media: opts.media ?? [], wakeReason: opts.wakeReason, ownerVideo: opts.ownerVideo });
+      items.push({ promptText, characterContextVersion: opts.characterContextVersion, farewell: !!opts.farewell, silent: !!opts.silent, media: opts.media ?? [], wakeReason: opts.wakeReason, ownerVideo: opts.ownerVideo });
       queued.set(key, items);
     }
     queueRetries.delete(key); // 新消息入队视为新的机会，重置退避计数
@@ -2633,7 +2659,7 @@ async function main() {
     markReadCalledKeys.delete(key);
   }
 
-  function retireSession(key) {
+  function retireSession(key, { stop = true } = {}) {
     const sessionId = state.sessions[key];
     delete state.sessions[key];
     delete state.sessionPolicies[key];
@@ -2671,7 +2697,7 @@ async function main() {
     }
     saveState();
     saveSocialV2State();
-    stopRetiredSessionWork(sessionId, key);
+    if (stop) stopRetiredSessionWork(sessionId, key);
     log(`会话权限已变化，停用旧映射 ${key} -> ${sessionId}`);
   }
 
@@ -2707,6 +2733,7 @@ async function main() {
         let failed = 0;
         for (let i = 0; i < items.length; i++) {
           const item = items[i];
+          if (!characterContextCurrent(item.characterContextVersion)) continue;
           try {
             const [kind, idStr] = key.split(':');
             const id = Number(idStr);
@@ -2714,7 +2741,8 @@ async function main() {
               log(`补投跳过未授权会话 ${key}（当前模式 ${currentMode}）`);
               continue;
             }
-            const result = await deliverPrompt(key, item.promptText, { farewell: item.farewell, silent: item.silent, media: item.media ?? [], wakeReason: item.wakeReason, ownerVideo: item.ownerVideo });
+            const result = await deliverPrompt(key, item.promptText, { characterContextVersion: item.characterContextVersion, farewell: item.farewell, silent: item.silent, media: item.media ?? [], wakeReason: item.wakeReason, ownerVideo: item.ownerVideo });
+            if (!characterContextCurrent(item.characterContextVersion)) continue;
             if (!result.ok) {
               log(`补投失败 ${key}: ${result.error || '未知错误'}`);
               failed += 1;
@@ -2726,6 +2754,7 @@ async function main() {
             queueRetries.delete(key);
             sent += 1;
           } catch (error) {
+            if (!characterContextCurrent(item.characterContextVersion)) continue;
             log(`补投异常 ${key}: ${error?.message ?? error}`);
             failed += 1;
             // 当前项 + 剩余项整体放回，避免丢失；旧消息优先
@@ -3224,6 +3253,7 @@ async function main() {
         // 因此仅靠控制台令牌挡不住 AI。这里改成白名单：只有 AI 真正需要的面放行，
         // 其余（人格/提示词/思考强度/白名单/重启…）一律 403——避免以后新增管理端点时忘记拉黑。
         if (req.headers['x-agent-token']) {
+          if (characterPrivacyFence || character?.invalidations().length) { sendJson({ ok: false, error: '角色记忆上下文正在更新' }, 403); return; }
           const agentAllowed = url.pathname === '/api/status'
             || url.pathname.startsWith('/api/socialV2/')
             || url.pathname.startsWith('/api/send/')
@@ -3295,7 +3325,49 @@ async function main() {
             sendJson({ ok: false, error: '角色基础存储未启用或不可用' }, 409);
             return;
           }
-          sendJson({ ok: true, character: character.setPaused(body.paused) });
+          sendJson({ ok: true, character: characterLife ? await characterLife.setPaused(body.paused) : character.setPaused(body.paused) });
+          return;
+        }
+        if (url.pathname.startsWith('/api/character/android/')) {
+          if (!character || !characterLife) {sendJson({ok:false,error:'角色模块不可用'},409);return;}
+          const androidStatus=()=>({ok:true,...(characterLife.status().android ?? {enabled:false,inFlight:false,fault:null}),budget:character.androidBudget(),jobs:character.androidJobs()});
+          if (req.method==='GET' && url.pathname==='/api/character/android/status') {sendJson(androidStatus());return;}
+          if (req.method==='POST' && ['/api/character/android/start','/api/character/android/stop','/api/character/android/reconcile'].includes(url.pathname)) {
+            const body=await readBody();
+            const starting=url.pathname.endsWith('/start');
+            if (!body || typeof body!=='object' || Array.isArray(body) || Object.keys(body).some(key=>!starting || key!=='kind') || (starting && !['game','bilibili'].includes(body.kind))) {
+              sendJson({ok:false,error:'安卓管理参数无效'},400);return;
+            }
+            try {
+              if (starting) sendJson({ok:true,operation:await characterLife.startAndroid(body.kind)});
+              else {
+                if (url.pathname.endsWith('/reconcile')) await characterLife.reconcileAndroid();
+                else await characterLife.setPaused(true);
+                sendJson(androidStatus());
+              }
+            } catch {sendJson({ok:false,error:'安卓请求未完成，请检查暂停、范围、额度和设备核对状态'},409);}
+            return;
+          }
+        }
+        if (req.method === 'GET' && ['/api/character/experiences', '/api/character/memory'].includes(url.pathname)) {
+          if (!character) { sendJson({ ok: false, error: '角色模块不可用' }, 409); return; }
+          try {
+            const scope = url.searchParams.get('scope') || 'public';
+            const data = url.pathname.endsWith('/memory') ? character.memories(scope, url.searchParams.get('q') || '') : character.experiences(scope);
+            sendJson({ ok: true, memoryVersion: character.memoryVersion(), data });
+          } catch { sendJson({ ok: false, error: '角色查询参数无效' }, 400); }
+          return;
+        }
+        if (req.method === 'POST' && ['/api/character/experience/delete', '/api/character/experience/correct'].includes(url.pathname)) {
+          if (!character || !characterLife) { sendJson({ ok: false, error: '角色模块不可用' }, 409); return; }
+          const body = await readBody();
+          const correcting = url.pathname.endsWith('/correct');
+          if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.id !== 'string'
+            || Object.keys(body).some(key => !['id', ...(correcting ? ['replacement'] : [])].includes(key)) || (correcting && !body.replacement)) {
+            sendJson({ ok: false, error: '角色更正或删除参数无效' }, 400); return;
+          }
+          try { sendJson({ ok: true, ...await characterLife.mutateExperience(body.id, correcting ? body.replacement : null) }); }
+          catch { sendJson({ ok: false, error: '记忆更改未完成，请检查参数及上下文停止状态' }, 409); }
           return;
         }
         if (req.method === 'GET' && url.pathname === '/api/presets') {
@@ -7550,7 +7622,9 @@ async function main() {
   function captureSendGuard(key) {
     const policy = sessionPolicy(key);
     const sessionId = state.sessions[key];
+    const memoryVersion = character?.memoryVersion();
     return () => {
+      if (characterPrivacyFence || (character && (memoryVersion !== character.memoryVersion() || character.invalidations().length))) throw new Error('发送已取消：角色记忆版本已失效');
       if (!isSessionAllowedInCurrentMode(key) || policy !== sessionPolicy(key)
           || (sessionId && state.sessions[key] !== sessionId)) {
         throw new Error('发送已取消：会话、模式或白名单已变化');
@@ -7615,6 +7689,7 @@ async function main() {
   }
 
   async function ensureSession(key) {
+    if (characterPrivacyFence || character?.invalidations().length) throw new Error('角色记忆上下文正在更新');
     const epoch = sessionEpoch;
     const policy = sessionPolicy(key);
     if (!isSessionAllowedInCurrentMode(key)) throw new Error(`当前模式不允许会话 ${key}`);
@@ -8459,6 +8534,8 @@ async function main() {
 
   // 实际的 DSH prompt 投递（不再直接对外暴露，统一走 promptQueues 串行队列）。
   async function deliverPromptNow(key, promptText, opts = {}) {
+    opts = { ...opts, characterContextVersion: opts.characterContextVersion ?? character?.memoryVersion() };
+    assertCharacterContextVersion(opts.characterContextVersion);
     if (!isSessionAllowedInCurrentMode(key)) throw new Error(`当前模式不允许会话 ${key}`);
     const videoBlocked = () => opts.ownerVideo && (currentMode !== 'closed-agent' || key !== `private:${cfg.ownerQQ}`);
     // 离线补投也要保留附件的权限边界，不能把本地路径带进聊天模式。
@@ -8478,7 +8555,7 @@ async function main() {
         items.shift();
         log(`队列满（${QUEUE_MAX}），丢弃最旧消息 (${key})`);
       }
-      items.push({ promptText, farewell: !!opts.farewell, silent: !!opts.silent, media: opts.media ?? [], wakeReason: opts.wakeReason, ownerVideo: opts.ownerVideo });
+      items.push({ promptText, characterContextVersion: opts.characterContextVersion, farewell: !!opts.farewell, silent: !!opts.silent, media: opts.media ?? [], wakeReason: opts.wakeReason, ownerVideo: opts.ownerVideo });
       queued.set(key, items);
       return { ok: true, queued: true };
     }
@@ -8507,6 +8584,7 @@ async function main() {
         promptText += `\n\n【本次消息快照】\n${JSON.stringify(wakeSnapshot)}\n以上消息已提供，无需重复查询；partial=true 时用 qq_get_unread_messages(afterSeq=readThroughSeq) 继续读取。先处理当前消息；回复前如需确认后续补充，用 qq_wait_for_messages(purpose="reply") 补足短静默，已安静够久会立即返回，不要先长等。收尾只确认你已处理的 readThroughSeq（本地 seq，非 QQ messageId），传给 qq_mark_read 或 qq_set_wake_config 的 throughSeq；新到消息留待处理。`;
       }
     }
+    assertCharacterContextVersion(opts.characterContextVersion);
     const projectedPrompt = withCharacterContext(key, promptText);
     let content = [{ type: 'text', text: withSlangContext(projectedPrompt) }];
     if (Array.isArray(opts.media) && opts.media.length > 0) {
@@ -8516,6 +8594,7 @@ async function main() {
     // 媒体解析成功后再标记退场，避免解析异常时残留退场标记。
     if (videoBlocked()) return { ok: true, skipped: true };
     if (!isCurrentSession(key, sessionId)) throw new Error('投递前会话已重置或权限已变化');
+    assertCharacterContextVersion(opts.characterContextVersion);
     if (opts.farewell) social.exitingSessions.add(sessionId);
     let accepted;
     try {
@@ -8524,6 +8603,7 @@ async function main() {
       if (opts.farewell) social.exitingSessions.delete(sessionId);
       throw error;
     }
+    assertCharacterContextVersion(opts.characterContextVersion);
     if (!accepted.result.ok) {
       if (opts.farewell) social.exitingSessions.delete(sessionId);
       const errText = `${accepted.result.error.code}: ${accepted.result.error.message}`;
@@ -8550,6 +8630,7 @@ async function main() {
   // 每个 QQ 会话串行投递 DSH prompt，保证 turn 完成顺序与提交顺序一致，
   // 从而让 [SILENT]、摘要静默、退场标记都能准确匹配到自己的 turn。
   function deliverPrompt(key, promptText, opts = {}) {
+    opts = { ...opts, characterContextVersion: opts.characterContextVersion ?? character?.memoryVersion() };
     return new Promise((resolve, reject) => {
       let entry = promptQueues.get(key);
       if (!entry) {
@@ -8585,6 +8666,7 @@ async function main() {
   }
 
   function scheduleSocialReply(key, promptText, minDelay, maxDelay, label, farewell = false, media = null) {
+    const characterContextVersion = character?.memoryVersion();
     const delay = randInt(minDelay, maxDelay);
     log(`社交模式：${label} ${key}，延迟 ${Math.round(delay / 1000)}s 后投递`);
     const timer = setTimeout(() => {
@@ -8593,7 +8675,7 @@ async function main() {
         timers.delete(timer);
         if (timers.size === 0) social.pendingTimers.delete(key);
       }
-      deliverPrompt(key, promptText, { farewell, media: media ?? [] }).catch((error) => log(`社交投递异常 ${key}: ${error?.message ?? error}`));
+      deliverPrompt(key, promptText, { characterContextVersion, farewell, media: media ?? [] }).catch((error) => log(`社交投递异常 ${key}: ${error?.message ?? error}`));
     }, delay);
     const timers = social.pendingTimers.get(key) ?? new Set();
     timers.add(timer);
@@ -9919,6 +10001,7 @@ async function main() {
   async function handleIncoming(kind, id, event, cfg) {
     const key = convKey(kind, id);
     const incomingEpoch = sessionEpoch;
+    const incomingMemoryVersion = character?.memoryVersion();
     if (!modeAllowed(key, kind, id, cfg, currentMode)) {
       log(`忽略未授权会话 ${key}（当前模式 ${currentMode}，来自 ${event.user_id}）`);
       return;
@@ -9954,7 +10037,7 @@ async function main() {
     // 引用对象是机器人自己时，视为直接对 AI 说（即使当前文字没有 @/关键词）。
     // 因此必须先解析 quoteTargetIsSelf 再做空文本过滤，避免“只引用不附文”被漏掉。
     const quoteTargetIsSelf = await isQuoteTargetSelf(event.message ?? [], kind, id, event.self_id);
-    if (!isSessionAllowedInCurrentMode(key)) return;
+    if (!isSessionAllowedInCurrentMode(key) || !characterContextCurrent(incomingMemoryVersion)) return;
     if (!plainContent && !quoteTargetIsSelf) return;
     const isOwner = String(event.user_id) === String(cfg.ownerQQ ?? '');
     const roleState = readRoleState();
@@ -10097,8 +10180,18 @@ async function main() {
     }
 
     const videoHint = await receiveVideo();
+    if (!characterContextCurrent(incomingMemoryVersion)) return;
     if (videoHint === null) return;
     const ownerVideo = !!videoHint && currentMode === 'closed-agent';
+
+    if (characterLife && cfg.character.autonomy.enabled && /近况|心情|喜欢|兴趣|记住|忘记|最近在做|休息/.test(plainContent)
+      && (kind === 'private' || isDirectAddress(plainContent, event, kind))) {
+      const sourceId = event.message_id ?? event.msg_id;
+      if (sourceId !== undefined && !SENSITIVE_RE.test(plainContent)) {
+        try { characterLife.notifyConversation({ sourceId: key + ':' + sourceId, scope: key, summary: plainContent.slice(0, 300) }); }
+        catch { log('角色事件登记失败；本轮继续原有 QQ 处理'); }
+      }
+    }
 
     // 二代仿真模式（reserved2）：唤醒调度
     if (currentMode === 'reserved2') {
@@ -10230,7 +10323,7 @@ async function main() {
         items.shift();
         log(`队列满（${QUEUE_MAX}），丢弃最旧消息 (${key})`);
       }
-      items.push({ promptText, media: mediaList, ownerVideo });
+      items.push({ promptText, characterContextVersion: incomingMemoryVersion, media: mediaList, ownerVideo });
       queued.set(key, items);
       const now = Date.now();
       if ((queuedHintAt.get(key) ?? 0) + QUEUE_HINT_COOLDOWN_MS < now) {
@@ -10246,11 +10339,12 @@ async function main() {
       sessionId = await ensureSession(key);
     } catch (error) {
       if (String(error?.message ?? error).includes('会话创建期间已重置')) {
-        enqueueForRetry(key, promptText, { media: mediaList, ownerVideo });
+        enqueueForRetry(key, promptText, { characterContextVersion: incomingMemoryVersion, media: mediaList, ownerVideo });
         return;
       }
       throw error;
     }
+    assertCharacterContextVersion(incomingMemoryVersion);
     const projectedPrompt = withCharacterContext(key, promptText);
     let content = [{ type: 'text', text: withSlangContext(projectedPrompt) }];
     if (Array.isArray(mediaList) && mediaList.length > 0) {
@@ -10259,11 +10353,13 @@ async function main() {
     }
     if (ownerVideo && (currentMode !== 'closed-agent' || key !== `private:${cfg.ownerQQ}`)) return;
     if (!isCurrentSession(key, sessionId)) throw new Error('投递前会话已重置或权限已变化');
+    assertCharacterContextVersion(incomingMemoryVersion);
     const accepted = await api.sessions.prompt({
       sessionId,
       mode: 'queue',
       content
     });
+    assertCharacterContextVersion(incomingMemoryVersion);
     if (!accepted.result.ok) {
       const errText = `${accepted.result.error.code}: ${accepted.result.error.message}`;
       const safeErrText = shouldAuditKey(key) && SENSITIVE_RE.test(errText) ? '（含敏感信息，已隐藏）' : errText;
@@ -10450,6 +10546,7 @@ async function main() {
           // 会话开场快照：只喂 token 账本。它含**历史** turn/end，绝不能让它们走
           // session/event 通道 —— 否则桥接会把早已结束的回合当成新回合去发 QQ 回复。
           if (frame.type === 'session/snapshot') {
+            characterLife?.handleSnapshot(frame.sessionId, frame.snapshot);
             recordSessionSnapshot(frame.sessionId, frame.snapshot);
             continue;
           }
@@ -10457,6 +10554,7 @@ async function main() {
             // Token 记账放在最前面：无论会话是否仍属当前模式/是否学习会话，
             // 花掉的钱都是真的，都必须入账（归属由 resolveKey 决定）。
             recordSessionUsage(frame.sessionId, frame.event);
+            if (routeCharacterEvent(frame)) continue;
             const key = reverse.get(frame.sessionId);
             if (!key) {
               // 黑话学习会话：只收集 turn，不发送 QQ，并唤醒等待中的学习任务。
@@ -10869,6 +10967,7 @@ async function main() {
       } catch (error) {
         log('事件流中断:', error?.message ?? error);
       } finally {
+        characterLife?.disconnect();
         // WebSocket 正常关闭和异常中断都会走到这里；必须清掉旧 turn 相关状态，
         // 否则重连后旧 collector/标记残留会导致回复重复累加或误判。
         collectors.clear(); // 清除旧 turn collector，避免重连后残留导致重复累加
@@ -10897,6 +10996,45 @@ async function main() {
     accessToken: cfg.snowluma.accessToken || undefined,
     reconnect: true
   });
+
+  function routeCharacterEvent(frame) {
+    return frame?.type === 'session/event' && characterLife?.handleEvent(frame.sessionId, frame.event) === true;
+  }
+  async function invalidateCharacterChats() {
+    // 不能判定旧摘要的完整依赖，首版保守失效全部已知聊天上下文和模型缓存。
+    sessionEpoch++;
+    const keys = new Set([...Object.keys(state.sessions), ...socialV2.conversations.keys(), ...queued.keys(), ...promptQueues.keys(), ...social.recentMessages.keys()]);
+    const ids = Object.values(state.sessions);
+    for (const [key, id] of Object.entries(state.sessions)) character.trackDecisionSession(id, 'privacy-invalidation', key);
+    for (const key of keys) {
+      retireSession(key, { stop: false });
+      clearSocialV2Timers(key); cancelSocialTimers(key); disarmPendingWakeLease(key);
+      pendingWakeKeys.delete(key); messageMediaStore.delete(key); seenForwardIds.delete(key);
+      socialV2.conversations.delete(key);
+      social.recentMessages.delete(key); social.pendingSummaries.delete(key); social.silentContext.delete(key);
+      queued.delete(key);
+      const entry = promptQueues.get(key);
+      if (entry) for (const item of entry.queue) item.reject(new Error('角色记忆变化，旧上下文投递已撤销'));
+      promptQueues.delete(key);
+    }
+    sessionPromises.clear(); saveSocialV2State(); saveState();
+    for (const id of ids) { await stopSessionAndConfirm(api, id); unwrap(await api.workspace.archiveSession({ sessionId: id }), 'archive character context'); character.retireDecisionSession(id); }
+  }
+  if (character) {
+    if (cfg.character.autonomy.enabled) fs.mkdirSync(path.join(STATE_DIR, 'life-agent'), { recursive: true, mode: 0o700 });
+    // 只有 B 站活动显式开启录屏分析、且 Seed 本身可用时才装配分析器；
+    // 否则整条链路不传它，活动退回纯播放证据，也不会产生任何方舟请求。
+    const clipAnalyzer = cfg.character.android?.bilibili?.analyze && cfg.videoAnalysis?.enabled
+      ? createClipAnalyzer({ root: ROOT, analyze: createVideoAnalyzer({ root: ROOT }), analysisConfig: cfg.videoAnalysis })
+      : null;
+    characterLife = createCharacterCoordinator({ runtime: character, config: cfg.character, api,
+      cwd: path.join(STATE_DIR, 'life-agent'), isReady: () => dshReady, isAllowed: isSessionAllowedInCurrentMode,
+      roleHint: currentRoleHint, selectModel: ensureChatModel, priceTable, invalidateChats: invalidateCharacterChats,
+      onPrivacyFence: blocked => { characterPrivacyFence = blocked; },
+      ...(clipAnalyzer ? { androidOptions: { clipAnalyzer } } : {}) });
+    characterLifeTimer = setInterval(() => { void characterLife.tick(); }, 30000);
+    characterLifeTimer.unref?.();
+  }
 
   bot.onPrivateMessage(async (event) => {
     if (event.user_id === event.self_id) return;
@@ -11098,16 +11236,16 @@ async function main() {
   await pumpMux();
 }
 
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
   log('退出中…');
   saveState();
-  closeCharacterRuntime();
+  await closeCharacterRuntime();
   releaseLock();
   process.exit(0);
 });
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   saveState();
-  closeCharacterRuntime();
+  await closeCharacterRuntime();
   releaseLock();
   process.exit(0);
 });
@@ -11130,7 +11268,7 @@ process.on('uncaughtException', (error) => {
   releaseLock();
   process.exit(1);
 });
-process.on('exit', () => { closeCharacterRuntime(); releaseLock(); });
+process.on('exit', () => { closeCharacterRuntimeSync(); releaseLock(); });
 
 main().catch((error) => {
   console.error('[bridge] 启动失败:', error);

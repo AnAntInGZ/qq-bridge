@@ -27,7 +27,7 @@ Node.js 要求 >= 22.13.0。保留 lockfile；`npm ci` 会运行 `patch-snowluma
 | 语法 | `scripts/check.mjs` 中的 `node --check` | 递归检查 `src/`、`scripts/`、`plugins/`、`dsh/` 中的 JS/MJS，不执行被检查文件 |
 | 预设一致性 | `scripts/build-agent-preset-patches.mjs --check` | 比较预设源与已提交的 bundle patch，不写文件 |
 | 会话路由 | `node --test src/core/session-router.test.mjs` | 独立模块的模式、preset、owner 边界与迁移；不代表主程序已接入 |
-| 角色基础状态 | `node --test src/character/runtime.test.mjs` | SQLite、去重、决策提交、活动、暂停、范围与恢复；不连接真实模型或设备 |
+| 角色基础状态 | `node --test src/character/runtime.test.mjs src/character/scheduler.test.mjs src/character/life-store.test.mjs src/character/dsh-life.test.mjs src/character/android.test.mjs` | SQLite、预算作息、来源状态/记忆、受限提案、迁移、删除恢复与事件调度；不连接真实模型或设备 |
 | 审计回归 | `scripts/test-audit.mjs` | 真实业务代码配合 VM、假网关、临时文件和回环 HTTP fixture；仍有下文记录的外部依赖缺口 |
 | 隐私扫描 | `scripts/privacy-scan.mjs` | 已跟踪和未忽略的未跟踪文件；结果受放行规则和匹配限额约束 |
 
@@ -65,7 +65,7 @@ QQ 消息 → SnowLuma OneBot WS → bridge.js / handleIncoming
 | 语音与连接发现 | `src/voice-core.js`、`src/send-voice-lib.js`、`src/snowluma-conn.js` | 审计中的 `test-voice*.mjs`、`test-snowluma-conn.mjs`；独立工具缺失时核对跳过项 |
 | 控制台界面 | `public/console.html`、`scripts/console-ui-fixture.mjs` | `npm run preview:console`、`npm run test:console-ui`、`test-console-static.mjs`；见 [UI 测试指南](CONSOLE-UI-TESTING.md) |
 | 逐会话策略模块 | `src/core/session-router.mjs` | `npm run test:router`；主程序尚未导入，接入需另验真实消息与退役链路 |
-| 角色基础存储与近况 | `src/character/`、bridge 的 `withCharacterContext` 和 `/api/character/*` | `npm run test:character`、`npm run demo:character`；见 [运行时指南](CHARACTER_RUNTIME.md)，外部活动未接入 |
+| 角色存储、生活决策与近况 | `src/character/`、bridge 的 `withCharacterContext` 和 `/api/character/*` | `npm run test:character`、`npm run demo:character`；见 [运行时指南](CHARACTER_RUNTIME.md)，生产调度及受限安卓活动已接入但默认关闭，真实设备未验收 |
 
 表中 `test-*.mjs` 位于 `scripts/`，可用 `node scripts/<文件名>` 单独执行。完整审计清单以 `scripts/test-audit.mjs` 的 `tests` 数组为准，不能凭文件名判断是否已覆盖。
 
@@ -141,8 +141,24 @@ node scripts/test-agent-preset-patches.mjs
 
 安装时 npm audit 报告 2 项已有依赖漏洞（1 high、1 critical，涉及 MCP SDK 和 proxy-addr）；本轮未自动升级依赖或运行 audit fix。隐私扫描结果仍须结合匹配限额告警解读。
 
+## 2026-10-21 调度模块验证
+
+main 的 0943e64 加保留的部署/预设改动，Windows、Node 26.6.0：新增离线调度与持久有限重试，最终 test:character 为 47/47；最低 Node 22.13.0 同组也是 47/47，无跳过，SQLite 实验性告警保留。旧数据库的快照迁移、失败回滚、重试次数与崩溃恢复均使用临时目录。
+
+统一检查的语法、预设一致性、路由与角色阶段通过；首轮审计 30/34，复核 31/34；视频符号链接 EPERM、缺少 VOICE.md 和 DSH 实装目录持续失败。setup CLI shim 首轮 ENOENT、复核通过，作为环境波动保留，不计为本批修复。最后补充磁盘故障闸门后重跑角色 47 项，未再重复全量审计。隐私扫描退出 0，匹配限额告警仍在。角色调度器没有接入生产 bridge，不代表 DSH 生活预设、预算作息或真实自主活动已验收；详见 [本批计划](../plans/2026-10-21-character-scheduler.md)。
+
+## 2026-10-21 生活决策验证
+
+本批将独立生活调度接入 bridge，新增 qq-life 原生受限提案、显式预算作息、来源绑定的心情兴趣与记忆整理、管理员删除更正和上下文失效。开发前角色基线 47/47；最低 Node 22.13.0 和当前 Node 的最终角色回归均为 80/80，无跳过。生产入口由真实 bridge VM 验证，未调用实际模型或账号。迁移、删除清单、旧备份恢复、取消受理与退出确认、旧投递重试等边界均使用临时目录和假 DSH。
+
+最终统一检查语法 127 个、路由 33/33、角色核心 64/64、真实桥接 16/16、预设一致性和隐私扫描通过；审计 31/34，仍为符号链接 EPERM、缺少 VOICE.md 和 DSH 实装目录，因此整体返回非零。隐私扫描检出 0，保留规则匹配上限告警。浏览器检查命令因缺少 Playwright 失败，浏览器未运行；静态或 HTTP 夹具不替代浏览器结果。详见 [生活实现计划](../plans/2026-10-21-character-life.md)。
+
 ## 持续维护
 
 按“目标与验收 → 最小改动 → 相关验证 → 完整检查 → 交付”推进。复杂任务在 `docs/plans/` 保存计划，包含目标、非目标、相关入口、步骤、验收命令、风险及待确认项，完成后记录实际结果。简单修复无需创建空计划。
 
 交付说明包含改动及原因、执行过的检查、失败/跳过/未执行项和真实环境影响。新约束更新到相应指南，并从 [文档索引](../README.md) 可达，不把聊天过程全部塞进 `AGENTS.md`。
+
+安卓 Windows 连接使用 `npm run android:tunnel -- --server SSH别名 --local-port 实例端口` 预览，添加 `--device-id` 与 `--apply` 才连接真实设备和 SSH。该命令属于显式实时操作，不在统一检查中执行；失败边界由 `src/character/android.test.mjs` 离线覆盖。见 [安卓活动指南](ANDROID_ACTIVITIES.md)。
+
+2026-10-21 安卓批最终验证：最低 Node 22.13 角色/bridge 103/103；统一检查审计 30/34，另有 Windows 安装 CLI 夹具 ENOENT，详情与既有失败分别记在 [实施计划](../plans/2026-10-21-android-activities.md)。

@@ -122,3 +122,15 @@
    ```bash
    node scripts/check-onebot-status.mjs
    ```
+
+### QQ 预设提示词变量
+
+`qq-chat` 和 `qq-chat-v2` 不加载本地工具上下文，只能依赖模型侧注册的 `provider`、`model` 提示词变量。不要在 persona 中加入 `{{cwd}}`；即使 persona 配置 schema 校验通过，回合装配仍会以 unknown prompt variable 失败，模型不会执行。修改预设后重新生成 bundle，重新加载 DSH profile（或重启 DSH），再创建测试会话。仅改 bundle 文件并创建会话，仍可能使用宿主缓存的旧预设。离线回归入口为 `node --test scripts/test-qq-preset-contract.mjs`。
+
+## 可选：角色生活决策
+
+本仓库现在还生成 qq-life 预设。它只注册 character_propose，使用同一工具守卫的 life 配置遮蔽全部继承工具，并拒绝 QQ、MCP、本地执行及联网。插件提供自包含的原生 ToolDefinition 与输入/输出契约，不向模型开放控制台或轮次密钥。版本契约基于 DSH 0.2.1-rc.2，其他版本应先做离线和目标环境核对。
+
+沿现有 setup 流程安装生成后的 bundle，再重启/重载目标 DSH；开发验证只运行生成及 --check，不对本机 DSH 执行安装。缺失预设、工具限制失败或会话绑定不符时生活模块拒绝运行，不回退默认预设。
+
+character.enabled 与 character.autonomy.enabled 默认关闭。启用自主生活还须配置作息、日轮数、token 与费用预留，并在启动后由管理员解除暂停；本批没有替线上实例启用或批准费用。配置、管理 API 与删除恢复语义见 [角色运行时](CHARACTER_RUNTIME.md)。

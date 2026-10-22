@@ -42,7 +42,48 @@
   "agentPreset": "qq-chat",
   "character": {
     "enabled": false,
-    "recentLimit": 3
+    "recentLimit": 3,
+    "interestSeeds": [],
+    "autonomy": {
+      "enabled": false,
+      "timezone": "Asia/Shanghai",
+      "activeHours": [],
+      "idleMs": 900000,
+      "dailyDecisions": 0,
+      "dailyTokens": 0,
+      "dailyCostMicros": 0,
+      "roundTokens": 0,
+      "roundCostMicros": 0
+    },
+    "android": {
+      "enabled": false,
+      "adbPath": "adb",
+      "serial": "127.0.0.1:5555",
+      "deviceId": "",
+      "scope": "internal",
+      "width": 720,
+      "height": 1280,
+      "dailySeconds": 0,
+      "dailyActions": 0,
+      "activitySeconds": 120,
+      "maxActions": 30,
+      "game": {
+        "enabled": false,
+        "version": "",
+        "board": null
+      },
+      "bilibili": {
+        "enabled": false,
+        "version": "",
+        "selectors": {},
+        "watchSeconds": 20,
+        "deepWatchSeconds": 0,
+        "maxVideos": 1,
+        "scrolls": 1,
+        "analyze": false,
+        "clipSeconds": 8
+      }
+    }
   },
   "workspaceTitle": "QQ 聊天",
   "allow": {

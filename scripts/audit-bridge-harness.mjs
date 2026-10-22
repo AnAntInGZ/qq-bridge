@@ -25,6 +25,8 @@ import * as voiceLib from '../src/send-voice-lib.js';
 import * as stateAcl from '../src/state-acl.mjs';
 import * as characterPolicy from '../src/character/policy.mjs';
 import { createCharacterRuntime } from '../src/character/runtime.mjs';
+import { createCharacterCoordinator } from '../src/character/coordinator.mjs';
+import { stopSessionAndConfirm } from '../src/character/dsh-life.mjs';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -64,13 +66,15 @@ export async function bridgeHarness({ config = {}, savedState, globals = {} } = 
   };
   const success = (value) => ({ result: { ok: true, value } });
   const api = {
-    events: { follow: (id) => calls.follows.push(id) },
+    events: { follow: (id) => { calls.follows.push(id); api.onFollow?.(id); } },
+    agentPresets: { list: async () => success({ presets: ['qq-chat', 'qq-chat-v2', 'qq-life'].map(id=>({id})) }) },
     workspace: {
       create: async () => success({ created: false, workspace: { workspaceId: 'fixture-workspace' } }),
       archiveSession: async ({ sessionId }) => { calls.archived.push(sessionId); return success({}); },
     },
     sessions: {
-      create: async (params) => { calls.created.push(params); return success({ sessionId: `fixture-${calls.created.length}` }); },
+      list: async () => success({ items: calls.created.map((params, i) => ({ sessionId: params.sessionId ?? 'fixture-' + (i + 1), running: false })) }),
+      create: async (params) => { calls.created.push(params); return success({ sessionId: params.sessionId ?? `fixture-${calls.created.length}` }); },
       selectModel: async () => success({ selected: { provider: 'fixture', model: 'fixture' } }),
       prompt: async (params) => { calls.prompts.push(params); return success({}); },
     },
@@ -110,7 +114,7 @@ export async function bridgeHarness({ config = {}, savedState, globals = {} } = 
   source = source.replace('  bot.onPrivateMessage(async (event) => {', `
   return {
     ensureSession, ensureSlangLearnerSession, resolvePresetName, deliverPrompt, drainPromptQueue,
-    character, characterSnapshot, closeCharacterRuntime,
+    character, characterLife, routeCharacterEvent, characterSnapshot, closeCharacterRuntime,
     sendToQQ, sendStickerV2, handleIncoming, startConsoleServer, cfg, state, api, bot, queued, promptQueues,
     getSocialV2State, appendSocialV2Message, recordSentMessagesV2,
     buildWakePromptV2, buildWakeSnapshotV2, sendWakePromptV2, socialV2,
@@ -139,7 +143,7 @@ export async function bridgeHarness({ config = {}, savedState, globals = {} } = 
     SnowLumaWebSocketClient: FakeBot, text: (s) => s,
     discoverDshLaunchToken: () => '', unwrap, createTurnCollector,
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...receiveVideo, ...analyzeVideo, ...videoAttachments, ...roleCard, ...forward, ...slang, ...sticker,
-    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...characterPolicy, createCharacterRuntime,
+    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...characterPolicy, createCharacterRuntime, createCharacterCoordinator, stopSessionAndConfirm,
     // ACL 收紧会 spawn icacls 去改**真实**文件系统；测试不该做这件事（同理见下面的
     // cleanupTemp / processAudioVolume 桩）。桩成成功，让 hardenStateDirAcl 走正常分支。
     hardenDir: () => ({ ok: true, detail: 'stub' }),
@@ -170,8 +174,9 @@ export async function bridgeHarness({ config = {}, savedState, globals = {} } = 
   const bridge = await context.auditReady;
   bridge.setPresets(['standard', 'qq-chat', 'qq-chat-v2']);
   bridge.setReady(true);
+  api.onFollow = id => bridge.characterLife?.handleSnapshot(id, { records: [] });
   return { ...bridge, calls, temp, async close() {
-    bridge.closeCharacterRuntime();
+    await bridge.closeCharacterRuntime();
     for (const timer of timers) clearTimeout(timer);
     fs.rmSync(temp, { recursive: true, force: true });
   } };

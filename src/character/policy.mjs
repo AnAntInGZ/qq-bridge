@@ -1,3 +1,6 @@
+import { normalizeAndroid } from './android-policy.mjs';
+import { normalizeAutonomy, normalizeSeeds } from './life-policy.mjs';
+
 // 信息范围由宿主登记，模型不能通过提案扩大可见范围。
 export function normalizeScope(value) {
   if (typeof value === 'string' && (value === 'public' || value === 'internal' || /^(group|private):[1-9]\d*$/.test(value))) return value;
@@ -20,12 +23,16 @@ export function intersectScopes(...scopes) {
 
 export function normalizeCharacterConfig(value = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('character 配置必须为对象');
-  const allowed = ['enabled', 'recentLimit'];
+  const allowed = ['enabled', 'recentLimit', 'autonomy', 'interestSeeds', 'android'];
   if (Object.keys(value).some(key => !allowed.includes(key))) throw new Error('character 配置包含不支持的字段');
   const config = { enabled: false, recentLimit: 3, ...value };
   if (typeof config.enabled !== 'boolean') throw new Error('character.enabled 必须为布尔值');
   if (!Number.isInteger(config.recentLimit) || config.recentLimit < 1 || config.recentLimit > 5) {
     throw new Error('character.recentLimit 必须为 1 到 5 的整数');
   }
+  config.autonomy = normalizeAutonomy(config.autonomy);
+  config.interestSeeds = normalizeSeeds(config.interestSeeds);
+  config.android = normalizeAndroid(config.android);
+  if (config.android.enabled && !config.enabled) throw new Error('安卓活动依赖角色存储');
   return config;
 }
