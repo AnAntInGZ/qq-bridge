@@ -69,6 +69,20 @@ test('仅接受已绑定的一次性会话实时提案，明确成功后才能�
   });
 });
 
+test('真机 DSH 的回合号是数字，同样能走完一次提案而不是被立刻判无效', async () => {
+  await fixture(async ({runtime,adapter,calls,send})=>{
+    const snapshot=begin(runtime);
+    const task=adapter.decide({snapshot,stageIntent:intent=>runtime.stageIntent(snapshot.id,intent),signal:new AbortController().signal});
+    await started(calls);
+    // 数值回合号是实际 DSH 的输出形态：此前按字符串校验，导致回合刚起就被中断。
+    send('turn/start',{turn:1});
+    send('tool/call',{name:'character_propose',callId:'call-one'});
+    send('character/proposal',{roundId:snapshot.id,expectedVersion:snapshot.version,intent:{action:'none',reason:'受限选择'}});
+    send('turn/end',{turn:1,reason:{kind:'completed'}});
+    const result=await task;
+    assert.equal(result.succeeded,true);
+  });
+});
 test('预设缺失拒绝创建，不回退默认完整工具', async () => {
   await fixture(async ({runtime,api,adapter,calls})=>{
     api.agentPresets.list=async()=>success({presets:[{id:'standard'}]});const snapshot=begin(runtime);

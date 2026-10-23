@@ -83,3 +83,12 @@ SQLite 中原子登记轮次及预算预留，然后才调用 DSH。失败、不
 运行 npm run test:character、npm run demo:character 和 npm run check。角色回归包含临时数据库、假时钟、假 DSH、真实 bridge VM 与回环 HTTP，不使用真实配置、凭据、QQ、Seed、B 站或设备。最低 Node 为 22.13.0，SQLite 实验性告警保留；全量检查的原有失败见 [开发指南](HARNESS.md)。
 
 真实 DSH 的预设挂载、模型费用、长期运行及角色表现尚未现场验收；没有改动线上配置或启用自主生活。安卓 B 站与 2048 已接入代码，真实设备尚未验收；媒体分析队列、分享发送、关系系统、复杂长期计划和可视化控制台仍属后续阶段。
+
+## 真机首次运行的已知问题
+
+首次在真实 DSH（0.2.1 系列，`deepseek-account/deepseek-flash`）上开启自主决策时暴露两件事：
+
+1. **回合号类型**：真机 `turn/start` 里 `data.turn` 是数字（如 `1`），夹具写的是字符串，适配器原按字符串校验，导致每个回合在几十毫秒内被判"轮次无效"并被中断（会话日志里是 `turn/end reason=aborted(user)`）。现已统一转成字符串再比较，并补了数字回合号的回归。
+2. **提案未发出**：修好回合号后，模型能正常跑完一轮并给出 `reasoning`，但整轮没有调用 `character_propose`，因此没有可提交的意图，决策记为失败。该轮耗时与用量正常（input 5971 / output 2698 tokens），属于提示与工具呈现层面的问题，尚未解决。
+
+排查这类问题要读 DSH 的会话日志：`/var/lib/qq-bridge/dsh/sessions/<工作目录>/<sessionId>/session.v4.jsonl.zstd`，用 Node 的 `zlib.zstdDecompressSync` 解开即可看到 `turn/start`、`tool/call`、`turn/end`。桥接有意不保存适配器原始错误，避免私人正文进诊断，所以只能从 DSH 侧取证。

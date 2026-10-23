@@ -101,6 +101,11 @@ export function createLifeDecisionAdapter({ api, runtime, cwd, roleHint = () => 
     handleEvent(sessionId, event) {
       const record = records.get(sessionId);
       if (!record) return false;
+      // 真机 DSH 的回合号是数字（turn/start {turn:1}），夹具里写成字符串。
+      // 统一转成字符串再比较，否则每个回合都会被判成"轮次无效"并在几十毫秒内被中断。
+      if (event && typeof event.data?.turn === 'number' && Number.isSafeInteger(event.data.turn)) {
+        event = { ...event, data: { ...event.data, turn: String(event.data.turn) } };
+      }
       if (record && event?.type === 'turn/end' && record.turn !== null && event.data?.turn === record.turn && Number.isSafeInteger(event.seq)) record.ended = true;
       if (!record.live || !event || typeof event !== 'object') return true;
       if (!Number.isSafeInteger(event.seq) || record.seen.has(event.seq)) return true;
